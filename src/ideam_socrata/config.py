@@ -19,7 +19,7 @@ LOG_DIR = BASE_DIR / 'logs'
 LOG_DIR.mkdir(exist_ok=True)
 logging.basicConfig(
     filename=LOG_DIR / 'automatizacion_ideam.log',
-    filemode='w',
+    filemode='a',
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )

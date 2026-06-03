@@ -39,3 +39,11 @@ desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# Nested sibling repositories (each lives in its own GitHub repo)
+website/
+website-worker/
+Ideamwebsite-ref/
+
+# Local outputs
+output/

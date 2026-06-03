@@ -1,0 +1,15 @@
+[Unit]
+Description=IDEAM backfill historico (Socrata -> Postgres, reanudable)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/ideam/ideam.env
+# Reanudable: los (dataset, anio) en estado 'done' se saltan automaticamente.
+ExecStart=/opt/ideam/venv/bin/python -m ideam_socrata.db.backfill --dataset all --compress
+WorkingDirectory=/opt/ideam/app
+Restart=on-failure
+RestartSec=60
+TimeoutStartSec=infinity
