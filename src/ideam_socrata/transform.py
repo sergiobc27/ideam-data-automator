@@ -41,8 +41,11 @@ def add_floating_id(df, dataset_id, col_fecha):
 
 
 def normalize_chunk(data, dataset_id, col_fecha="fechaobservacion", dict_reemplazo=None):
-    """Normalize one Socrata page into typed, payload-ready dataframe rows."""
-    df = pd.DataFrame.from_records(data)
+    """Normalize one Socrata page into typed, payload-ready dataframe rows.
+
+    Accepts a list of records (JSON path) or an existing DataFrame (CSV path).
+    """
+    df = data.copy() if isinstance(data, pd.DataFrame) else pd.DataFrame.from_records(data)
     if df.empty:
         return df
 

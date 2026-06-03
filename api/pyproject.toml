@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ideam-api"
+version = "0.1.0"
+description = "API IDEAM sobre PostgreSQL/TimescaleDB (reemplaza las consultas Socrata en vivo del Worker)."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "psycopg[binary,pool]>=3.2",
+  "pydantic>=2",
+  "pydantic-settings>=2",
+  "pyarrow",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

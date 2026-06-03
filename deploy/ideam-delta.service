@@ -1,0 +1,12 @@
+[Unit]
+Description=IDEAM delta diario (Socrata -> Postgres)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/ideam/ideam.env
+ExecStart=/opt/ideam/venv/bin/python -m ideam_socrata.db.delta
+WorkingDirectory=/opt/ideam/app
+TimeoutStartSec=4h

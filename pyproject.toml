@@ -18,6 +18,8 @@ dependencies = [
   "rich",
   "pyarrow",
   "pydantic",
+  "psycopg[binary]>=3.1",
+  "requests",
 ]
 
 [project.scripts]

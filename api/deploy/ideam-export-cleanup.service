@@ -1,0 +1,6 @@
+[Unit]
+Description=Limpieza de exports IDEAM expirados (>1h)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'find /var/lib/ideam-api/exports -maxdepth 1 -name "*.zip" -mmin +60 -delete; find /var/lib/ideam-api/exports -maxdepth 1 -name "job-*" -type d -mmin +120 -exec rm -rf {} +'
