@@ -1,99 +1,110 @@
-# IDEAM Hydrology Data Automator
+# IDEAM Data Automator
 
-Pipeline en Python para extraer, validar, organizar y preparar datos hidrologicos del
-IDEAM publicados en Socrata / Datos Abiertos Colombia.
+Herramientas en Python para extraer, validar, organizar y descargar datos
+hidrometeorológicos del IDEAM publicados en Socrata / Datos Abiertos Colombia
+(`www.datos.gov.co`).
 
-El proyecto esta orientado a descargas reproducibles, control de calidad basico,
-exportacion organizada por territorio y preparacion para upsert hacia un dataset Socrata
-destino.
+Este repositorio es el **motor** del ecosistema IDEAM y ofrece dos formas de uso:
+
+| Modo | Para quién | Cómo |
+|---|---|---|
+| **CLI local** | Quien quiere descargar datos a su PC (la herramienta original de la tesis) | `pip install .` y listo |
+| **Servidor** | Quien quiere hospedar un espejo propio en PostgreSQL/TimescaleDB con API HTTP (es lo que alimenta [ideam.sergiobc.com](https://ideam.sergiobc.com)) | `pip install ".[server]"` + carpeta `api/` |
 
 ## Funcionalidades
 
-- Consulta datasets IDEAM en `www.datos.gov.co` mediante `sodapy`.
-- Filtra por departamento, municipio, estacion y rango temporal.
-- Homologa variantes de departamentos como `ATLANTICO` y `ATLANTICO` con tilde.
-- Genera `floating_id` estable para upsert idempotente en Socrata.
-- Exporta datos a `data/departamento/municipio/`.
-- Nombra archivos como `variable_departamento_municipio_hhmm_ddmmyy`.
-- Divide CSV grandes con sufijos `_2`, `_3`, etc. para evitar limites de Excel.
-- Incluye validacion Pydantic para payloads de carga.
-- Incluye una interfaz CLI interactiva y una verificacion rapida para Atlantico.
+- Consulta los 13 datasets hidrometeorológicos estándar del IDEAM (precipitación,
+  niveles de río y mar, temperaturas, viento, humedad, presión) más datasets especiales.
+- Filtra por departamento, municipio, estación y rango temporal, con homologación
+  de variantes territoriales (tildes, mojibake: `ATLANTICO`/`ATLÁNTICO`).
+- Genera `floating_id` estable (SHA-256) para upserts idempotentes.
+- Exporta organizado por `departamento/municipio/` en Parquet y CSV, dividiendo
+  CSV grandes para no exceder los límites de Excel.
+- Valida payloads con Pydantic.
+- **Modo servidor**: backfill masivo paralelo y reanudable hacia una hypertable
+  comprimida de TimescaleDB, delta diario incremental, y API FastAPI con
+  endpoints de catálogo, vista previa, exportación ZIP y analítica.
 
-## Instalacion
+## Instalación (CLI local)
 
 ```powershell
+git clone https://github.com/sergiobc27/ideam-data-automator.git
+cd ideam-data-automator
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -e .
+.venv\Scripts\Activate.ps1          # En Linux/macOS: source .venv/bin/activate
+pip install .
 ```
 
-Tambien se puede instalar con:
+## Uso rápido
 
 ```powershell
-pip install -r requirements.txt
+# Ver los datasets disponibles y sus IDs
+ideam-socrata datasets
+
+# Asistente interactivo (guiado, con menús)
+ideam-socrata interactive
+
+# Descarga directa scriptable (sin menús): precipitación de Atlántico, ene-mar 2024
+ideam-socrata download --dataset s54a-sgyg --department ATLANTICO `
+    --start-date 2024-01-01 --end-date 2024-04-01 --csv
+
+# Verificación rápida de cobertura
+ideam-socrata verify-atlantico --start-date 2024-01-01 --end-date 2024-02-01
 ```
 
-## Configuracion
+`download` acepta `--department` repetido, `--output-dir`, `--workers` y `--csv`.
+Los archivos quedan organizados como `salida/DEPARTAMENTO/MUNICIPIO/variable_*.parquet|csv`.
 
-Copia `.env.example` a `.env` si quieres manejar variables localmente.
-El proyecto no necesita token para todos los endpoints publicos, pero un token de Socrata
-mejora limites y estabilidad.
+## Configuración
 
-Variables principales:
+Copia `.env.example` a `.env` si quieres manejar variables localmente. Un token
+de aplicación de Socrata (gratuito) mejora límites y estabilidad:
 
 ```text
 SOCRATA_APP_TOKEN=
 SOCRATA_DOMAIN=www.datos.gov.co
-SOCRATA_USERNAME=
-SOCRATA_PASSWORD=
 SOCRATA_LIMIT=50000
 SOCRATA_MAX_WORKERS=10
 SOCRATA_TIMEOUT=300
-SOCRATA_UPSERT_CHUNK_SIZE=5000
-EXCEL_MAX_ROWS=1048576
-```
-
-Para upsert real hacia Socrata, configura `SOCRATA_USERNAME` y `SOCRATA_PASSWORD`.
-El dataset destino debe tener `floating_id` como identificador unico de fila.
-
-## Uso
-
-Abrir asistente interactivo:
-
-```powershell
-ideam-socrata interactive
-```
-
-O desde Python:
-
-```powershell
-python -m ideam_socrata.cli interactive
-```
-
-Verificacion rapida para precipitacion en Atlantico:
-
-```powershell
-ideam-socrata verify-atlantico --start-date 2024-01-01 --end-date 2024-02-01
 ```
 
 ## Estructura
 
 ```text
 src/ideam_socrata/
-  cli.py               # Entry point CLI
-  config.py            # Configuracion y cliente Socrata
+  cli.py               # Entry point CLI (interactive, datasets, download, verify)
+  batch.py             # Descarga no interactiva / scriptable
+  config.py            # Configuración, cliente Socrata y catálogo de datasets
   core.py              # Flujo interactivo de descarga
-  extract.py           # Paginacion Socrata
-  transform.py         # Normalizacion, floating_id, deduplicacion
-  query_validation.py  # Validacion de variantes territoriales
-  exporting.py         # Parquet/CSV organizado por carpetas
+  extract.py           # Paginación Socrata
+  transform.py         # Normalización, floating_id, deduplicación
+  query_validation.py  # Validación de variantes territoriales
+  exporting.py         # Export Parquet/CSV organizado por carpetas
   validation.py        # Modelos Pydantic
-  load.py              # Payload y upsert Socrata
-  tools.py             # Funcion/schema para agentes LLM
-tests/
-  test_query_export_helpers.py
+  load.py              # Payload y upsert hacia Socrata
+  db/                  # [server] Espejo PostgreSQL/TimescaleDB:
+                       #   schema.sql, backfill paralelo, delta diario, estaciones
+api/                   # [server] API FastAPI (catálogos, preview, export ZIP, analítica)
+deploy/                # [server] Unidades systemd (backfill, delta, API)
+tests/                 # Pruebas unitarias
 ```
+
+## Modo servidor (espejo propio)
+
+El espejo completo (≈450 millones de observaciones) vive en PostgreSQL 15 +
+TimescaleDB con compresión columnar y agregados continuos para dashboards:
+
+```bash
+pip install ".[server]"
+psql "$DATABASE_URL" -f src/ideam_socrata/db/schema.sql   # esquema idempotente
+python -m ideam_socrata.db.load_estaciones                 # catálogo de estaciones
+python -m ideam_socrata.db.backfill --dataset all --compress --workers 8
+python -m ideam_socrata.db.delta                           # incremental diario
+```
+
+La API (`api/`) replica los contratos del frontend de `ideam.sergiobc.com` y agrega
+analítica (series temporales, climatología, estadísticas por región/estación).
+Las unidades de `deploy/` y `api/deploy/` dejan todo corriendo bajo systemd.
 
 ## Pruebas
 
@@ -102,11 +113,19 @@ python -m unittest discover -s tests
 python -m compileall src tests
 ```
 
-## Politica de datos
+## Política de datos
 
-No se deben subir datos reales, logs, caches, backups ni credenciales al repositorio.
-Los directorios `data/`, `archive/`, `Backup/`, `logs/`, `scratch/`, `scripts/legacy/`
-y `src/gui/` estan excluidos del paquete publico por defecto.
+No se deben subir datos reales, logs, cachés, backups ni credenciales al
+repositorio. Los directorios `data/`, `archive/`, `Backup/`, `logs/`, `scratch/`
+y `scripts/legacy/` están excluidos del paquete público.
+
+## Ecosistema
+
+| Repositorio | Rol |
+|---|---|
+| **ideam-data-automator** (este) | Motor: CLI local + ingesta + API |
+| `website` | Webapp [ideam.sergiobc.com](https://ideam.sergiobc.com) (React + Cloudflare Worker) |
+| `ideam-figma-design` | Referencia histórica del diseño (archivado) |
 
 ## Licencia
 

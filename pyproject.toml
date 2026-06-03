@@ -18,6 +18,12 @@ dependencies = [
   "rich",
   "pyarrow",
   "pydantic",
+]
+
+[project.optional-dependencies]
+# Componentes de servidor (espejo PostgreSQL/TimescaleDB e ingesta).
+# El usuario local de la CLI NO los necesita: `pip install .` basta.
+server = [
   "psycopg[binary]>=3.1",
   "requests",
 ]

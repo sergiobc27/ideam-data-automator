@@ -57,6 +57,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("interactive", help="Abre el asistente interactivo de descarga.")
 
+    subparsers.add_parser("datasets", help="Lista los datasets IDEAM disponibles y sus IDs.")
+
+    download = subparsers.add_parser(
+        "download",
+        help="Descarga no interactiva (scriptable): dataset + departamentos + rango de fechas.",
+    )
+    download.add_argument("--dataset", required=True, help="ID Socrata, ej. s54a-sgyg (ver 'datasets')")
+    download.add_argument(
+        "--department", action="append", required=True,
+        help="Departamento (repetible: --department ATLANTICO --department BOLIVAR)",
+    )
+    download.add_argument("--start-date", required=True, help="YYYY-MM-DD (inclusive)")
+    download.add_argument("--end-date", required=True, help="YYYY-MM-DD (exclusivo)")
+    download.add_argument("--csv", action="store_true", help="Exportar tambien copias CSV")
+    download.add_argument("--output-dir", default="data", help="Carpeta destino (default: data)")
+    download.add_argument("--workers", type=int, default=None, help="Bloques mensuales en paralelo")
+
     verify = subparsers.add_parser(
         "verify-atlantico",
         help="Ejecuta una verificacion rapida y acotada de precipitacion para Atlantico.",
@@ -78,6 +95,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command in (None, "interactive"):
         interactive_main()
+        return 0
+    if args.command == "datasets":
+        from .batch import list_datasets
+
+        list_datasets()
+        return 0
+    if args.command == "download":
+        from .batch import download
+
+        download(
+            dataset_id=args.dataset,
+            departments=args.department,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            include_csv=args.csv,
+            base_dir=args.output_dir,
+            workers=args.workers,
+        )
         return 0
     if args.command == "verify-atlantico":
         return _verify_atlantico(args)
