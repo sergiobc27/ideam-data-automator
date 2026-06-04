@@ -142,7 +142,8 @@ def main():
                                         temp_f = [f.replace("zonahidrografica", "zona_hidrografica").replace("codigoestacion", "codigo") for f in estado["filtros_base"]]
                                         for k, v in estado["resumen"]["avanzados"].items():
                                             c_api = filtros_cat.get(k, k).replace("zonahidrografica", "zona_hidrografica")
-                                            temp_f.append(f"upper({c_api}) IN ({', '.join([f'\'{x.upper()}\'' for x in v])})")
+                                            valores = ", ".join("'" + x.upper() + "'" for x in v)
+                                            temp_f.append(f"upper({c_api}) IN ({valores})")
                                         cat_where = " AND ".join(temp_f) if temp_f else None
                                         est_data = intentar(lambda: CLIENT.get(CATALOG_DATASET_ID, select="codigo, nombre", where=cat_where, order="nombre", limit=50000), "Catálogo")
                                     if est_data:
