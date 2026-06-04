@@ -73,6 +73,10 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--csv", action="store_true", help="Exportar tambien copias CSV")
     download.add_argument("--output-dir", default="data", help="Carpeta destino (default: data)")
     download.add_argument("--workers", type=int, default=None, help="Bloques mensuales en paralelo")
+    download.add_argument(
+        "--engine", choices=["rapido", "soda"], default="rapido",
+        help="rapido: export cacheado + gzip (5-10x mas veloz) | soda: paginado clasico",
+    )
 
     verify = subparsers.add_parser(
         "verify-atlantico",
@@ -112,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             include_csv=args.csv,
             base_dir=args.output_dir,
             workers=args.workers,
+            engine=args.engine,
         )
         return 0
     if args.command == "verify-atlantico":

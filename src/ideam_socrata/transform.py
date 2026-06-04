@@ -80,6 +80,18 @@ def normalize_chunk(data, dataset_id, col_fecha="fechaobservacion", dict_reempla
     return df
 
 
+def parse_export_dates(serie):
+    """Fechas del export masivo de Socrata (formato US, ej. 11/15/2024 10:20:00 PM).
+
+    Parseo con formato explicito (rapido) y fallback general para valores mixtos.
+    """
+    parsed = pd.to_datetime(serie, format="%m/%d/%Y %I:%M:%S %p", errors="coerce")
+    mask = parsed.isna() & serie.notna()
+    if mask.any():
+        parsed.loc[mask] = pd.to_datetime(serie.loc[mask], errors="coerce")
+    return parsed
+
+
 def deduplicate_observations(df, date_column):
     """Deduplicate observations with sensor-aware keys when available."""
     if "codigoestacion" not in df.columns or date_column not in df.columns:
