@@ -47,6 +47,10 @@ from .transform import deduplicate_observations, normalize_chunk, normalize_labe
 
 DATASETS_ESTANDAR = {d["id"]: d for d in DATASETS_INFO if d.get("tipo") == "estandar"}
 
+
+class SocrataError(RuntimeError):
+    """La API de Socrata no respondió tras agotar los reintentos."""
+
 # tamanos aproximados (medidos jun-2026) para orientar al usuario
 _TAMANO_APROX = {
     "s54a-sgyg": "~282M filas", "sgfv-3yp8": "~127M filas", "kiw7-v9ta": "~110M filas",
@@ -122,7 +126,7 @@ def _fetch_block(dataset_id, col_fecha, year, month, base_filters, descripcion):
             f"{descripcion} {year}-{month:02d} offset={offset}",
         )
         if data is None:
-            raise RuntimeError(f"Fallo critico descargando {descripcion} {year}-{month:02d}")
+            raise SocrataError(f"{descripcion} {year}-{month:02d}")
         rows.extend(data)
         if len(data) < LIMIT:
             return rows
@@ -176,7 +180,7 @@ def _fetch_block_fast(dataset_id, col_fecha, year, month, where_deptos, descripc
 
     df = intentar(_bajar, f"{descripcion} {year}-{month:02d} (rapido)")
     if df is None:
-        raise RuntimeError(f"Fallo critico descargando {descripcion} {year}-{month:02d}")
+        raise SocrataError(f"{descripcion} {year}-{month:02d}")
     return df
 
 
@@ -236,27 +240,36 @@ def download(
         console=console,
     ) as progress:
         tarea = progress.add_task("Descargando bloques", total=len(blocks), filas="0")
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            if engine == "rapido":
-                futures = {
-                    pool.submit(_fetch_block_fast, dataset_id, col_fecha, y, m, where_deptos, nombre): (y, m)
-                    for y, m in blocks
-                }
-            else:
-                futures = {
-                    pool.submit(_fetch_block, dataset_id, col_fecha, y, m, [where_deptos], nombre): (y, m)
-                    for y, m in blocks
-                }
-            for future in as_completed(futures):
-                resultado = future.result()
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 if engine == "rapido":
-                    if resultado is not None and not resultado.empty:
-                        frames.append(resultado)
-                        filas_brutas += len(resultado)
+                    futures = {
+                        pool.submit(_fetch_block_fast, dataset_id, col_fecha, y, m, where_deptos, nombre): (y, m)
+                        for y, m in blocks
+                    }
                 else:
-                    registros.extend(resultado)
-                    filas_brutas = len(registros)
-                progress.update(tarea, advance=1, filas=f"{filas_brutas:,}")
+                    futures = {
+                        pool.submit(_fetch_block, dataset_id, col_fecha, y, m, [where_deptos], nombre): (y, m)
+                        for y, m in blocks
+                    }
+                for future in as_completed(futures):
+                    resultado = future.result()
+                    if engine == "rapido":
+                        if resultado is not None and not resultado.empty:
+                            frames.append(resultado)
+                            filas_brutas += len(resultado)
+                    else:
+                        registros.extend(resultado)
+                        filas_brutas = len(registros)
+                    progress.update(tarea, advance=1, filas=f"{filas_brutas:,}")
+        except SocrataError as exc:
+            raise SystemExit(
+                f"\nNo se pudo completar la descarga: la API de Socrata no respondió "
+                f"para {exc} tras varios reintentos.\n"
+                "Suele ser un problema temporal del servidor de Datos Abiertos. "
+                "Espera unos minutos y reintenta; si persiste, prueba con --engine soda "
+                "o un rango de fechas más corto."
+            ) from None
 
     if engine == "rapido":
         resultados = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -266,7 +279,23 @@ def download(
         vacio = not registros
 
     if vacio:
-        console.print("[bold primario]No se obtuvieron filas en el rango seleccionado.[/bold primario]")
+        console.print(
+            Panel(
+                f"[texto]La consulta fue válida pero el IDEAM no tiene registros de "
+                f"[bold]{nombre}[/bold] para [bold]{', '.join(canonicos)}[/bold] entre "
+                f"{start_date} y {end_date}.\n\n"
+                "Posibles razones:\n"
+                "  • No existen estaciones de esa variable en ese departamento.\n"
+                "  • El periodo elegido está fuera del histórico disponible.\n\n"
+                "Sugerencia: revisa la cobertura con "
+                f"[s_bold]ideam-socrata verify --department {canonicos[0]} "
+                f"--dataset-id {dataset_id}[/s_bold], o prueba otro departamento/periodo.[/texto]",
+                title="[s_bold] SIN DATOS [/s_bold]",
+                border_style="secundario",
+                expand=False,
+                padding=(1, 2),
+            )
+        )
         return {"rows": 0, "files_parquet": 0, "files_csv": 0, "seconds": round(time.time() - t0, 1)}
 
     df = normalize_chunk(resultados, dataset_id, col_fecha, replacements)

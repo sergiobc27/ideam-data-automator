@@ -1,8 +1,16 @@
 import unittest
+from unittest import mock
 
 import pandas as pd
 
-from ideam_socrata.batch import _validar_departamentos, _validar_fechas, month_blocks
+from ideam_socrata import batch
+from ideam_socrata.batch import (
+    SocrataError,
+    _validar_departamentos,
+    _validar_fechas,
+    download,
+    month_blocks,
+)
 from ideam_socrata.transform import parse_export_dates
 
 
@@ -73,6 +81,39 @@ class ParseExportDatesTests(unittest.TestCase):
             us.iloc[0].strftime("%Y-%m-%dT%H:%M:%S"),
             iso.iloc[0].strftime("%Y-%m-%dT%H:%M:%S"),
         )
+
+
+class DownloadFlowTests(unittest.TestCase):
+    """Flujo de download sin red: se simula _fetch_block_fast."""
+
+    DS = "ia8x-22em"  # Nivel del Mar (dataset estandar valido)
+
+    def test_resultado_vacio_no_lanza_y_reporta_cero(self):
+        with mock.patch.object(batch, "_fetch_block_fast", return_value=pd.DataFrame()):
+            res = download(
+                self.DS, ["BOLIVAR"], "2015-01-01", "2015-03-01",
+                base_dir="scratch/_t", engine="rapido",
+            )
+        self.assertEqual(res["rows"], 0)
+        self.assertEqual(res["files_parquet"], 0)
+
+    def test_fallo_de_red_da_mensaje_claro(self):
+        with mock.patch.object(batch, "_fetch_block_fast", side_effect=SocrataError("bloque X")):
+            with self.assertRaises(SystemExit) as ctx:
+                download(
+                    self.DS, ["BOLIVAR"], "2015-01-01", "2015-02-01",
+                    base_dir="scratch/_t", engine="rapido",
+                )
+        msg = str(ctx.exception)
+        self.assertIn("Socrata", msg)
+        self.assertIn("reintenta", msg.lower())
+
+    def test_departamento_invalido_no_toca_red(self):
+        # Debe fallar en validacion ANTES de intentar cualquier descarga.
+        with mock.patch.object(batch, "_fetch_block_fast") as m:
+            with self.assertRaises(SystemExit):
+                download(self.DS, ["NOEXISTE"], "2015-01-01", "2015-02-01")
+        m.assert_not_called()
 
 
 if __name__ == "__main__":
