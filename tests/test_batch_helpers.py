@@ -2,8 +2,36 @@ import unittest
 
 import pandas as pd
 
-from ideam_socrata.batch import month_blocks
+from ideam_socrata.batch import _validar_departamentos, _validar_fechas, month_blocks
 from ideam_socrata.transform import parse_export_dates
+
+
+class ValidacionesTests(unittest.TestCase):
+    def test_typo_sugiere_correccion(self):
+        with self.assertRaises(SystemExit) as ctx:
+            _validar_departamentos(["BOLIBAR"])
+        self.assertIn("BOLIVAR", str(ctx.exception))
+
+    def test_acepta_variantes_con_tilde_y_minusculas(self):
+        self.assertEqual(_validar_departamentos(["atlántico"]), ["ATLANTICO"])
+
+    def test_canoniza_y_deduplica(self):
+        self.assertEqual(
+            _validar_departamentos(["BOGOTA", "BOGOTÁ D.C."]), ["BOGOTA D.C."]
+        )
+
+    def test_fecha_malformada(self):
+        with self.assertRaises(SystemExit) as ctx:
+            _validar_fechas("2024-99-01", "2024-02-01")
+        self.assertIn("YYYY-MM-DD", str(ctx.exception))
+
+    def test_rango_invertido(self):
+        with self.assertRaises(SystemExit) as ctx:
+            _validar_fechas("2024-06-01", "2024-01-01")
+        self.assertIn("ANTERIOR", str(ctx.exception))
+
+    def test_rango_valido_pasa(self):
+        self.assertIsNone(_validar_fechas("2024-01-01", "2024-06-01"))
 
 
 class MonthBlocksTests(unittest.TestCase):

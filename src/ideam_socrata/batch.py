@@ -11,6 +11,7 @@ Ejemplo:
 
 from __future__ import annotations
 
+import difflib
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,9 +34,57 @@ from .config import (
 from .core import intentar
 from .exporting import export_by_department_municipality
 from .query_validation import build_department_filter
-from .transform import deduplicate_observations, normalize_chunk, parse_export_dates
+from .transform import deduplicate_observations, normalize_chunk, normalize_label, parse_export_dates
 
 DATASETS_ESTANDAR = {d["id"]: d for d in DATASETS_INFO if d.get("tipo") == "estandar"}
+
+# tamanos aproximados (medidos jun-2026) para orientar al usuario
+_TAMANO_APROX = {
+    "s54a-sgyg": "~282M filas", "sgfv-3yp8": "~127M filas", "kiw7-v9ta": "~110M filas",
+    "uext-mhny": "~87M filas", "62tk-nxj5": "~34M filas", "ccvq-rp9s": "~27M filas",
+    "afdg-3zpb": "~27M filas", "bdmn-sqnh": "~21M filas", "vfth-yucv": "~14M filas",
+    "pt9a-aamx": "~12M filas", "uxy3-jchf": "~1.3M filas", "ia8x-22em": "~278K filas",
+    "7z6g-yx9q": "~93K filas",
+}
+
+_CANONICO_POR_VARIANTE = {
+    normalize_label(v): canonico
+    for canonico, variantes in MAPEO_DEPARTAMENTOS.items()
+    for v in [canonico, *variantes]
+}
+
+
+def _validar_departamentos(departments: list[str]) -> list[str]:
+    """Valida ANTES de ir a la red; con sugerencia ante errores de escritura."""
+    canonicos: list[str] = []
+    for dep in departments:
+        canonico = _CANONICO_POR_VARIANTE.get(normalize_label(dep))
+        if canonico is None:
+            cercano = difflib.get_close_matches(
+                normalize_label(dep), list(_CANONICO_POR_VARIANTE), n=1, cutoff=0.6
+            )
+            pista = f" ¿Quisiste decir '{_CANONICO_POR_VARIANTE[cercano[0]]}'?" if cercano else ""
+            raise SystemExit(
+                f"Departamento no reconocido: '{dep}'.{pista}\n"
+                f"Validos: {', '.join(sorted(MAPEO_DEPARTAMENTOS))}"
+            )
+        if canonico not in canonicos:
+            canonicos.append(canonico)
+    return canonicos
+
+
+def _validar_fechas(start_date: str, end_date: str) -> None:
+    try:
+        inicio, fin = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    except ValueError:
+        raise SystemExit(
+            f"Fecha invalida: '{start_date}' / '{end_date}'. Usa el formato YYYY-MM-DD, ej: 2024-01-31."
+        ) from None
+    if inicio >= fin:
+        raise SystemExit(
+            f"Rango invalido: --start-date ({start_date}) debe ser ANTERIOR a --end-date "
+            f"({end_date}). Nota: end-date es exclusivo (no se incluye ese dia)."
+        )
 
 
 def month_blocks(start_date: str, end_date: str):
@@ -138,21 +187,28 @@ def download(
     """
     dataset = DATASETS_ESTANDAR.get(dataset_id)
     if dataset is None:
-        validos = ", ".join(sorted(DATASETS_ESTANDAR))
-        raise SystemExit(f"Dataset '{dataset_id}' no es de tipo estandar. Validos: {validos}")
+        validos = "\n  ".join(
+            f"{d['id']}  {d['nombre']}" for d in DATASETS_INFO if d.get("tipo") == "estandar"
+        )
+        raise SystemExit(
+            f"Dataset '{dataset_id}' no reconocido. Datasets disponibles:\n  {validos}"
+        )
     if not departments:
         raise SystemExit("Indica al menos un departamento con --department.")
     if engine not in ("rapido", "soda"):
         raise SystemExit("engine debe ser 'rapido' o 'soda'.")
 
+    canonicos = _validar_departamentos(departments)
+    _validar_fechas(start_date, end_date)
+
     col_fecha, nombre = dataset["fecha_col"], dataset["nombre"]
     where_deptos, replacements, _variants = build_department_filter(
-        departments, MAPEO_DEPARTAMENTOS
+        canonicos, MAPEO_DEPARTAMENTOS
     )
     blocks = month_blocks(start_date, end_date)
     console.print(
         f"[texto]Descargando [bold]{nombre}[/bold] ({dataset_id}) | "
-        f"{', '.join(departments)} | {start_date} -> {end_date} | "
+        f"{', '.join(canonicos)} | {start_date} -> {end_date} | "
         f"{len(blocks)} bloques | motor {engine}[/texto]"
     )
 
@@ -211,7 +267,8 @@ def list_datasets() -> None:
     console.print("[bold secundario]Datasets estandar (usables con download):[/bold secundario]")
     for d in DATASETS_INFO:
         if d.get("tipo") == "estandar":
-            console.print(f"  [bold]{d['id']}[/bold]  {d['nombre']}")
+            tamano = _TAMANO_APROX.get(d["id"], "")
+            console.print(f"  [bold]{d['id']}[/bold]  {d['nombre']:<32} [texto_oscuro]{tamano}[/texto_oscuro]")
     console.print("\n[bold secundario]Datasets especiales (solo asistente interactivo):[/bold secundario]")
     for d in DATASETS_INFO:
         if d.get("tipo") == "especial":

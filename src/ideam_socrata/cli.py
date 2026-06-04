@@ -52,7 +52,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ideam-socrata",
         description="Automatiza extraccion, validacion y organizacion de datos IDEAM/Socrata.",
+        epilog=(
+            "ejemplo: ideam-socrata download --dataset s54a-sgyg --department ATLANTICO "
+            "--start-date 2024-01-01 --end-date 2024-07-01 --csv"
+        ),
     )
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        _version = _pkg_version("ideam-hydrology-data-automator")
+    except Exception:  # noqa: BLE001
+        _version = "dev"
+    parser.add_argument("--version", action="version", version=f"ideam-socrata {_version}")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("interactive", help="Abre el asistente interactivo de descarga.")
