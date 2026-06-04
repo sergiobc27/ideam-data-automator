@@ -24,7 +24,8 @@ dist/
 data/
 archive/
 Backup/
-docs/
+docs/*
+!docs/HISTORIA.md
 logs/
 scratch/
 *.log
