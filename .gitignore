@@ -19,6 +19,12 @@ dist/
 .env
 .env.*
 !.env.example
+.pypirc
+*.key
+*.pem
+
+# Stale virtualenv pending manual deletion
+.venv-bloqueado-borrar-luego/
 
 # Runtime data and generated artifacts
 data/
