@@ -13,8 +13,11 @@ Uso:
 import argparse
 import logging
 import os
+import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -29,15 +32,16 @@ logger = logging.getLogger(__name__)
 
 DATASETS_ESTANDAR = [d for d in DATASETS_INFO if d.get("tipo") == "estandar"]
 
-# Orden de backfill por tamano conocido (conteos Socrata 2026-06):
-# pequenos primero, los gigantes al final para proteger disco/tiempo.
+# Orden de backfill (re-priorizado 2026-06-04): precipitacion es el dataset
+# insignia del proyecto -> va apenas termine velocidad del viento, para tener
+# los datos mas valiosos disponibles antes. Humedad (grande) cierra.
 _RANGO_TAMANO = {
-    "ia8x-22em": 0,    # Nivel del Mar (278K)
-    "bdmn-sqnh": 60,   # Nivel Inst. Rio (21M)
-    "ccvq-rp9s": 70,   # Temp Maxima (27M)
-    "afdg-3zpb": 71,   # Temp Minima (~27M)
-    "uext-mhny": 90,   # Humedad (87M)
-    "s54a-sgyg": 99,   # Precipitacion (282M) - SIEMPRE al final
+    "ia8x-22em": 0,    # Nivel del Mar (completo)
+    "kiw7-v9ta": 1,    # Direccion Viento (completo)
+    "sgfv-3yp8": 2,    # Velocidad Viento (en curso)
+    "s54a-sgyg": 3,    # PRECIPITACION (282M) - priorizada
+    # resto (presion, niveles de rio/mar, temperaturas): rango 40 por defecto
+    "uext-mhny": 90,   # Humedad (87M) al final
 }
 
 # variante -> canonico (normalize_chunk lo aplica con normalize_label)
@@ -111,6 +115,69 @@ def backfill_window(conn, dataset_id, col_fecha, start_iso, end_iso, chunksize):
         df = normalize_chunk(chunk, dataset_id, col_fecha, DICT_REEMPLAZO)
         df, _dups = deduplicate_observations(df, col_fecha)
         rows_loaded += load_dataframe(conn, df, mode="insert")
+    return rows_loaded
+
+
+RAW_DIR = Path(os.getenv("BACKFILL_RAW_DIR", "/opt/ideam/raw"))
+
+
+def download_bulk_csv(dataset_id, attempts=3):
+    """Descarga el export masivo COMPLETO a disco con curl (lectura continua).
+
+    Clave del diseno: el descargador lee el socket a maxima velocidad SIN
+    pausas de procesamiento -> Socrata no corta la conexion por ociosidad
+    (que era la causa real de los IncompleteRead). Igual que un navegador.
+    Si el archivo ya existe (pre-descargado), se reusa.
+    """
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    dest = RAW_DIR / f"{dataset_id}.csv"
+    if dest.exists() and dest.stat().st_size > 0:
+        logger.info("Bulk %s ya descargado (%.1f GB)", dataset_id, dest.stat().st_size / 1e9)
+        return dest
+
+    domain = DOMAIN if DOMAIN.startswith("http") else f"https://{DOMAIN}"
+    url = f"{domain}/api/views/{dataset_id}/rows.csv?accessType=DOWNLOAD"
+    part = dest.with_suffix(".part")
+    cmd = ["curl", "-sS", "--fail", "--connect-timeout", "30", "--speed-limit", "1000",
+           "--speed-time", "120", "-o", str(part), url]
+    if APP_TOKEN:
+        cmd[1:1] = ["-H", f"X-App-Token: {APP_TOKEN}"]
+
+    for i in range(attempts):
+        t0 = time.time()
+        try:
+            part.unlink(missing_ok=True)
+            subprocess.run(cmd, check=True)
+            part.rename(dest)
+            gb = dest.stat().st_size / 1e9
+            logger.info("Bulk %s descargado: %.2f GB en %.0f min", dataset_id, gb, (time.time() - t0) / 60)
+            print(f"  {dataset_id}: CSV masivo descargado ({gb:.2f} GB)", flush=True)
+            return dest
+        except subprocess.CalledProcessError as exc:
+            logger.warning("Descarga bulk %s fallo (intento %s/%s): %s", dataset_id, i + 1, attempts, exc)
+            if i == attempts - 1:
+                raise
+            time.sleep(30 * (i + 1))
+
+
+def process_csv_file(conn, dataset, path, chunksize):
+    """Procesa un CSV masivo YA descargado: sin esperas de red, solo CPU+COPY."""
+    dataset_id, col_fecha = dataset["id"], dataset["fecha_col"]
+    rows_loaded = 0
+    t0 = time.time()
+    next_report = 2_000_000
+    for chunk in pd.read_csv(path, dtype=str, chunksize=chunksize):
+        chunk.columns = [str(c).strip().lower() for c in chunk.columns]
+        if col_fecha in chunk.columns:
+            chunk[col_fecha] = _parse_bulk_dates(chunk[col_fecha])
+        df = normalize_chunk(chunk, dataset_id, col_fecha, DICT_REEMPLAZO)
+        df, _dups = deduplicate_observations(df, col_fecha)
+        rows_loaded += load_dataframe(conn, df, mode="insert")
+        if rows_loaded >= next_report:
+            rate = rows_loaded / max(time.time() - t0, 1)
+            print(f"  {dataset_id} disco: {rows_loaded:,} filas ({rate:,.0f}/s)", flush=True)
+            state.mark(conn, dataset_id, "backfill", "full", "running", rows_loaded=rows_loaded)
+            next_report += 2_000_000
     return rows_loaded
 
 
@@ -248,6 +315,24 @@ def backfill_dataset(conn, dataset, chunksize, start_year=None, end_year=None, w
         logger.info("Backfill %s: ya completo (full).", dataset_id)
         return 0
 
+    # MODO PRINCIPAL: descargar el export masivo a disco (lectura continua,
+    # inmune a cortes por ociosidad) y procesarlo localmente. El upsert
+    # idempotente absorbe cualquier solapamiento con anios ya cargados.
+    if not start_year and not end_year:
+        try:
+            path = download_bulk_csv(dataset_id)
+            state.mark(conn, dataset_id, "backfill", "full", "running")
+            rows = process_csv_file(conn, dataset, path, chunksize)
+            state.mark(conn, dataset_id, "backfill", "full", "done", rows_loaded=rows)
+            path.unlink(missing_ok=True)
+            logger.info("Backfill %s completo via disco: %s filas", dataset_id, rows)
+            print(f"  {dataset_id}: COMPLETO via disco ({rows:,} filas)", flush=True)
+            return rows
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            state.mark(conn, dataset_id, "backfill", "full", "error", error=str(exc)[:500])
+            logger.error("Modo disco de %s fallo; cayendo a ventanas anuales: %s", dataset_id, exc)
+
     years = year_range(dataset_id, col_fecha)
     if start_year:
         years = [y for y in years if y >= start_year]
@@ -306,8 +391,35 @@ def main():
             raise SystemExit(f"Dataset {args.dataset} no esta en DATASETS_INFO (tipo estandar).")
 
     with get_conn() as conn:
+        # Prefetch: mientras se procesa un dataset, se descarga el siguiente
+        # (la red y la CPU trabajan en paralelo sin estorbarse).
+        ya_completos = {
+            d["id"] for d in objetivos
+            if "full" in state.done_chunks(conn, d["id"], "backfill")
+        }
+        pendientes_ids = [d for d in objetivos if d["id"] not in ya_completos]
+        prefetch_threads = {}
+
+        def _prefetch(ds_id):
+            try:
+                download_bulk_csv(ds_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Prefetch de %s fallo (se reintentara en su turno): %s", ds_id, exc)
+
         gran_total = 0
-        for dataset in objetivos:
+        for i, dataset in enumerate(objetivos):
+            # lanzar la descarga del proximo pendiente en segundo plano
+            restantes = [d for d in pendientes_ids if d["id"] != dataset["id"]
+                         and d["id"] not in prefetch_threads]
+            if restantes and not (args.start_year or args.end_year):
+                siguiente = restantes[0]["id"]
+                hilo = threading.Thread(target=_prefetch, args=(siguiente,), daemon=True)
+                prefetch_threads[siguiente] = hilo
+                hilo.start()
+            # si este dataset fue pre-descargado, esperar a que termine su hilo
+            if dataset["id"] in prefetch_threads:
+                prefetch_threads[dataset["id"]].join()
+
             gran_total += backfill_dataset(
                 conn, dataset, args.chunksize, args.start_year, args.end_year,
                 workers=args.workers,
