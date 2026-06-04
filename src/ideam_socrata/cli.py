@@ -4,6 +4,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+
+
+def _configurar_consola_utf8() -> None:
+    """En consolas Windows heredadas los acentos salen como '?'/'�';
+    reconfigurar la salida a UTF-8 lo corrige sin afectar otros sistemas."""
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (AttributeError, ValueError):
+                pass
+
+
+_configurar_consola_utf8()
 
 from .config import CLIENT, MAPEO_DEPARTAMENTOS
 from .core import intentar
@@ -89,17 +104,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="rapido: export cacheado + gzip (5-10x mas veloz) | soda: paginado clasico",
     )
 
-    verify = subparsers.add_parser(
-        "verify-atlantico",
-        help="Ejecuta una verificacion rapida y acotada de precipitacion para Atlantico.",
-    )
-    verify.add_argument("--dataset-id", default="s54a-sgyg")
-    verify.add_argument("--catalog-dataset-id", default="hp9r-jxuu")
-    verify.add_argument("--department", default="ATLANTICO")
-    verify.add_argument("--date-column", default="fechaobservacion")
-    verify.add_argument("--start-date", default="2024-01-01")
-    verify.add_argument("--end-date", default="2024-02-01")
-    verify.add_argument("--limit", type=int, default=5)
+    for nombre, ayuda in (
+        ("verify", "Verifica cobertura de un dataset/departamento (muestra + catalogo)."),
+        ("verify-atlantico", "Atajo historico: verificacion de precipitacion en Atlantico."),
+    ):
+        verify = subparsers.add_parser(nombre, help=ayuda)
+        verify.add_argument("--dataset-id", default="s54a-sgyg")
+        verify.add_argument("--catalog-dataset-id", default="hp9r-jxuu")
+        verify.add_argument("--department", default="ATLANTICO")
+        verify.add_argument("--date-column", default="fechaobservacion")
+        verify.add_argument("--start-date", default="2024-01-01")
+        verify.add_argument("--end-date", default="2024-02-01")
+        verify.add_argument("--limit", type=int, default=5)
 
     return parser
 
@@ -130,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
             engine=args.engine,
         )
         return 0
-    if args.command == "verify-atlantico":
+    if args.command in ("verify", "verify-atlantico"):
         return _verify_atlantico(args)
 
     parser.error(f"Comando no soportado: {args.command}")

@@ -20,6 +20,15 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+from rich.table import Table
 
 from .config import (
     APP_TOKEN,
@@ -215,25 +224,46 @@ def download(
     t0 = time.time()
     # concurrencia conservadora con el motor rapido (doc Socrata sugiere 2-4)
     max_workers = workers or (4 if engine == "rapido" else min(MAX_WORKERS, 8))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        if engine == "rapido":
-            futures = {
-                pool.submit(_fetch_block_fast, dataset_id, col_fecha, y, m, where_deptos, nombre): (y, m)
-                for y, m in blocks
-            }
-            frames = [f.result() for f in as_completed(futures)]
-            frames = [f for f in frames if f is not None and not f.empty]
-            resultados = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-            vacio = resultados.empty
-        else:
-            futures = {
-                pool.submit(_fetch_block, dataset_id, col_fecha, y, m, [where_deptos], nombre): (y, m)
-                for y, m in blocks
-            }
-            resultados = []
+    frames: list[pd.DataFrame] = []
+    registros: list[dict] = []
+    filas_brutas = 0
+    with Progress(
+        TextColumn("  [progress.description]{task.description}"),
+        BarColumn(bar_width=None),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TextColumn("• [bold secundario]{task.fields[filas]} filas brutas"),
+        console=console,
+    ) as progress:
+        tarea = progress.add_task("Descargando bloques", total=len(blocks), filas="0")
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            if engine == "rapido":
+                futures = {
+                    pool.submit(_fetch_block_fast, dataset_id, col_fecha, y, m, where_deptos, nombre): (y, m)
+                    for y, m in blocks
+                }
+            else:
+                futures = {
+                    pool.submit(_fetch_block, dataset_id, col_fecha, y, m, [where_deptos], nombre): (y, m)
+                    for y, m in blocks
+                }
             for future in as_completed(futures):
-                resultados.extend(future.result())
-            vacio = not resultados
+                resultado = future.result()
+                if engine == "rapido":
+                    if resultado is not None and not resultado.empty:
+                        frames.append(resultado)
+                        filas_brutas += len(resultado)
+                else:
+                    registros.extend(resultado)
+                    filas_brutas = len(registros)
+                progress.update(tarea, advance=1, filas=f"{filas_brutas:,}")
+
+    if engine == "rapido":
+        resultados = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        vacio = resultados.empty if isinstance(resultados, pd.DataFrame) else True
+    else:
+        resultados = registros
+        vacio = not registros
 
     if vacio:
         console.print("[bold primario]No se obtuvieron filas en el rango seleccionado.[/bold primario]")
@@ -255,21 +285,46 @@ def download(
         "seconds": round(time.time() - t0, 1),
     }
     console.print(
-        f"[bold exito]Listo:[/bold exito] [texto]{summary['rows']:,} filas unicas "
-        f"({duplicados:,} duplicados eliminados) -> {len(outputs)} parquet, {total_csv} csv "
-        f"en '{base_dir}/' ({summary['seconds']}s)[/texto]"
+        Panel(
+            f"[texto]Filas únicas: [bold]{summary['rows']:,}[/bold]\n"
+            f"Duplicados eliminados: {duplicados:,}\n"
+            f"Archivos generados: {len(outputs)} parquet · {total_csv} csv\n"
+            f"Carpeta: {base_dir}/\n"
+            f"Tiempo: {summary['seconds']}s · motor {engine}[/texto]",
+            title="[bold exito] DESCARGA COMPLETA [/bold exito]",
+            border_style="exito",
+            expand=False,
+            padding=(1, 2),
+        )
     )
     return summary
 
 
 def list_datasets() -> None:
     """Imprime los datasets disponibles para `download` y el asistente."""
-    console.print("[bold secundario]Datasets estandar (usables con download):[/bold secundario]")
+    tabla = Table(
+        title="Datasets IDEAM — usables con 'download'",
+        title_style="p_bold",
+        header_style="s_bold",
+        border_style="borde",
+    )
+    tabla.add_column("ID", style="bold", no_wrap=True)
+    tabla.add_column("Variable")
+    tabla.add_column("Tamaño aprox.", justify="right", style="texto_oscuro")
     for d in DATASETS_INFO:
         if d.get("tipo") == "estandar":
-            tamano = _TAMANO_APROX.get(d["id"], "")
-            console.print(f"  [bold]{d['id']}[/bold]  {d['nombre']:<32} [texto_oscuro]{tamano}[/texto_oscuro]")
-    console.print("\n[bold secundario]Datasets especiales (solo asistente interactivo):[/bold secundario]")
+            tabla.add_row(d["id"], d["nombre"], _TAMANO_APROX.get(d["id"], "—"))
+    console.print(tabla)
+
+    especiales = Table(
+        title="Datasets especiales — solo asistente interactivo",
+        title_style="texto_oscuro",
+        header_style="texto_oscuro",
+        border_style="borde",
+    )
+    especiales.add_column("ID", style="bold", no_wrap=True)
+    especiales.add_column("Variable")
     for d in DATASETS_INFO:
         if d.get("tipo") == "especial":
-            console.print(f"  [bold]{d['id']}[/bold]  {d['nombre']}")
+            especiales.add_row(d["id"], d["nombre"])
+    console.print(especiales)
