@@ -1,64 +1,76 @@
 # IDEAM Data Automator
 
-Herramientas en Python para extraer, validar, organizar y descargar datos
+Herramienta en Python para **extraer, validar, organizar y descargar** datos
 hidrometeorológicos del IDEAM publicados en Socrata / Datos Abiertos Colombia
-(`www.datos.gov.co`).
+(`www.datos.gov.co`), directamente a tu PC.
 
-Este repositorio es el **motor** del ecosistema IDEAM y ofrece dos formas de uso:
+Desarrollada como Trabajo de Grado de Ingeniería Civil en la Universidad de la
+Costa (CUC), Barranquilla — automatiza en minutos lo que manualmente toma horas:
+consultar estación por estación en los portales del IDEAM, descargar, limpiar
+y organizar los archivos.
 
-| Modo | Para quién | Cómo |
-|---|---|---|
-| **CLI local** | Quien quiere descargar datos a su PC (la herramienta original de la tesis) | `pip install .` y listo |
-| **Servidor** | Quien quiere hospedar un espejo propio en PostgreSQL/TimescaleDB con API HTTP (es lo que alimenta [ideam.sergiobc.com](https://ideam.sergiobc.com)) | `pip install ".[server]"` + carpeta `api/` |
-
-## Funcionalidades
-
-- Consulta los 13 datasets hidrometeorológicos estándar del IDEAM (precipitación,
-  niveles de río y mar, temperaturas, viento, humedad, presión) más datasets especiales.
-- Filtra por departamento, municipio, estación y rango temporal, con homologación
-  de variantes territoriales (tildes, mojibake: `ATLANTICO`/`ATLÁNTICO`).
-- Genera `floating_id` estable (SHA-256) para upserts idempotentes.
-- Exporta organizado por `departamento/municipio/` en Parquet y CSV, dividiendo
-  CSV grandes para no exceder los límites de Excel.
-- Valida payloads con Pydantic.
-- **Modo servidor**: backfill masivo paralelo y reanudable hacia una hypertable
-  comprimida de TimescaleDB, delta diario incremental, y API FastAPI con
-  endpoints de catálogo, vista previa, exportación ZIP y analítica.
-
-## Instalación (CLI local)
+## Instalación
 
 ```powershell
-git clone https://github.com/sergiobc27/ideam-data-automator.git
-cd ideam-data-automator
-python -m venv .venv
-.venv\Scripts\Activate.ps1          # En Linux/macOS: source .venv/bin/activate
-pip install .
+pip install ideam-data-automator
 ```
 
-## Uso rápido
+(Requiere Python 3.10+. También puedes clonar el repo y usar `pip install .`)
+
+## Uso
+
+### Interfaz visual (recomendada)
+
+```powershell
+ideam-socrata tui
+```
+
+Asistente de pantalla completa con navegación por flechas, selección con
+checkmarks y panel de resumen en vivo:
+
+1. **Variable** — las 21 fuentes del IDEAM (precipitación, niveles de río y mar,
+   temperaturas, viento, humedad, presión, calidad de aire/agua, y más), con buscador.
+2. **Departamentos** — selección múltiple + filtros avanzados por zona
+   hidrográfica, categoría, tecnología, estado, corriente, entidad, municipio
+   o códigos de estación manuales.
+3. **Años** — detecta el histórico disponible **para tu filtro** (estaciones y
+   rango real de fechas) antes de descargar.
+4. **Descarga** — paralela, con progreso en vivo (filas/s, bloques, tiempo restante).
+
+### Asistente clásico de consola
+
+```powershell
+ideam-socrata interactive
+```
+
+### Descarga directa scriptable (sin menús)
 
 ```powershell
 # Ver los datasets disponibles y sus IDs
 ideam-socrata datasets
 
-# Asistente interactivo (guiado, con menús)
-ideam-socrata interactive
-
-# Descarga directa scriptable (sin menús): precipitación de Atlántico, ene-mar 2024
+# Precipitación de Atlántico, ene-mar 2024, con copia CSV
 ideam-socrata download --dataset s54a-sgyg --department ATLANTICO `
     --start-date 2024-01-01 --end-date 2024-04-01 --csv
-
-# Verificación rápida de cobertura
-ideam-socrata verify-atlantico --start-date 2024-01-01 --end-date 2024-02-01
 ```
 
 `download` acepta `--department` repetido, `--output-dir`, `--workers` y `--csv`.
-Los archivos quedan organizados como `salida/DEPARTAMENTO/MUNICIPIO/variable_*.parquet|csv`.
 
-## Configuración
+## Qué obtienes
 
-Copia `.env.example` a `.env` si quieres manejar variables localmente. Un token
-de aplicación de Socrata (gratuito) mejora límites y estabilidad:
+- Archivos organizados por carpetas: `DEPARTAMENTO/MUNICIPIO/variable_*.parquet|csv`.
+- **Fechas reales** (no texto): el CSV abre en Excel con filtros de fecha
+  funcionales y el Parquet trae timestamps nativos para PowerBI/pandas.
+- CSV dividido automáticamente para no exceder el límite de filas de Excel.
+- **`RESUMEN_*.txt`** por descarga: rango real de los datos, filas por estación
+  con primera/última observación y % de completitud mensual.
+- Deduplicación automática y homologación de variantes territoriales
+  (`ATLANTICO`/`ATLÁNTICO`, mojibake del portal).
+
+## Configuración (opcional)
+
+Un token de aplicación de Socrata (gratuito) mejora límites y estabilidad.
+Copia `.env.example` a `.env`:
 
 ```text
 SOCRATA_APP_TOKEN=
@@ -72,60 +84,40 @@ SOCRATA_TIMEOUT=300
 
 ```text
 src/ideam_socrata/
-  cli.py               # Entry point CLI (interactive, datasets, download, verify)
+  tui.py               # Interfaz visual de pantalla completa (Textual)
+  main.py / core.py    # Asistente clásico de consola
+  cli.py               # Entry point (tui, interactive, datasets, download, verify)
   batch.py             # Descarga no interactiva / scriptable
+  engine.py            # Motor de descarga silencioso (usado por la TUI)
   config.py            # Configuración, cliente Socrata y catálogo de datasets
-  core.py              # Flujo interactivo de descarga
   extract.py           # Paginación Socrata
   transform.py         # Normalización, floating_id, deduplicación
   query_validation.py  # Validación de variantes territoriales
-  exporting.py         # Export Parquet/CSV organizado por carpetas
+  exporting.py         # Export Parquet/CSV + reporte de cobertura
   validation.py        # Modelos Pydantic
-  load.py              # Payload y upsert hacia Socrata
-  db/                  # [server] Espejo PostgreSQL/TimescaleDB:
-                       #   schema.sql, backfill paralelo, delta diario, estaciones
-api/                   # [server] API FastAPI (catálogos, preview, export ZIP, analítica)
-deploy/                # [server] Unidades systemd (backfill, delta, API)
 tests/                 # Pruebas unitarias
 ```
 
-## Modo servidor (espejo propio)
-
-El espejo completo (≈450 millones de observaciones) vive en PostgreSQL 15 +
-TimescaleDB con compresión columnar y agregados continuos para dashboards:
-
-```bash
-pip install ".[server]"
-psql "$DATABASE_URL" -f src/ideam_socrata/db/schema.sql   # esquema idempotente
-python -m ideam_socrata.db.load_estaciones                 # catálogo de estaciones
-python -m ideam_socrata.db.backfill --dataset all --compress --workers 8
-python -m ideam_socrata.db.delta                           # incremental diario
-```
-
-La API (`api/`) replica los contratos del frontend de `ideam.sergiobc.com` y agrega
-analítica (series temporales, climatología, estadísticas por región/estación).
-Las unidades de `deploy/` y `api/deploy/` dejan todo corriendo bajo systemd.
+> El repositorio incluye además un **modo servidor** opcional (espejo
+> PostgreSQL/TimescaleDB + API) para uso avanzado: ver
+> [`docs/SERVIDOR.md`](docs/SERVIDOR.md). No es necesario para la herramienta local.
 
 ## Pruebas
 
 ```powershell
-python -m unittest discover -s tests
-python -m compileall src tests
+python -m pytest tests/
 ```
+
+## Cita académica
+
+Si usas esta herramienta en tu investigación, cítala con los metadatos de
+[`CITATION.cff`](CITATION.cff) (GitHub muestra el botón *"Cite this repository"*).
 
 ## Política de datos
 
-No se deben subir datos reales, logs, cachés, backups ni credenciales al
-repositorio. Los directorios `data/`, `archive/`, `Backup/`, `logs/`, `scratch/`
-y `scripts/legacy/` están excluidos del paquete público.
-
-## Ecosistema
-
-| Repositorio | Rol |
-|---|---|
-| **ideam-data-automator** (este) | Motor: CLI local + ingesta + API |
-| `website` | Webapp [ideam.sergiobc.com](https://ideam.sergiobc.com) (React + Cloudflare Worker) |
-| `ideam-figma-design` | Referencia histórica del diseño (archivado) |
+Los datos provienen del IDEAM bajo la Política de Datos Abiertos de Colombia y
+son de uso académico e investigativo. No se suben datos reales, logs ni
+credenciales al repositorio.
 
 ## Licencia
 

@@ -9,7 +9,11 @@ title IDEAM Data Automator
 cd /d "%~dp0"
 set PYTHONUTF8=1
 set PYTHONPATH=%~dp0src
-REM Respaldo para consolas que ignoran /max (conhost clasico): maximizar via Win32.
-powershell -NoProfile -Command "Add-Type -Name W -Namespace U -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool ShowWindow(System.IntPtr h, int n); [DllImport(\"kernel32.dll\")] public static extern System.IntPtr GetConsoleWindow();'; [U.W]::ShowWindow([U.W]::GetConsoleWindow(), 3)" >nul 2>&1
+REM Respaldo SOLO para el conhost clasico (ignora /max). En Windows Terminal
+REM (WT_SESSION definida) NO debe ejecutarse: desoculta una ventana fantasma
+REM del conhost que roba los clicks del mouse.
+if not defined WT_SESSION (
+    powershell -NoProfile -Command "Add-Type -Name W -Namespace U -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool ShowWindow(System.IntPtr h, int n); [DllImport(\"kernel32.dll\")] public static extern System.IntPtr GetConsoleWindow();'; [U.W]::ShowWindow([U.W]::GetConsoleWindow(), 3)" >nul 2>&1
+)
 ".venv\Scripts\python.exe" -m ideam_socrata.cli tui
 pause
