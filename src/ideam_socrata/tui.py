@@ -16,6 +16,7 @@ from __future__ import annotations
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Footer,
@@ -29,6 +30,8 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
+
+from .engine import ATRIBUTOS_AVANZADOS
 
 from .config import DATASETS_INFO, MAPEO_DEPARTAMENTOS
 from .query_validation import build_department_filter
@@ -59,6 +62,106 @@ AVISO_LEGAL = (
     "  • El autor no se hace responsable del tratamiento posterior de la información.\n"
     "  • Se prohíbe el uso para fines comerciales no autorizados."
 )
+
+
+class ValuePicker(ModalScreen):
+    """Selector multi-valor de un atributo del catálogo (carga en vivo)."""
+
+    CSS = f"""
+    ValuePicker {{ align: center middle; }}
+    #vp {{ border: round {AMARILLO}; background: $surface; padding: 1 2; width: 70%; height: auto; max-height: 85%; }}
+    #vp Button {{ margin: 1 1 0 0; }}
+    """
+
+    def __init__(self, etiqueta, col, filtros_dep, preseleccion):
+        super().__init__()
+        self.etiqueta, self.col, self.filtros_dep = etiqueta, col, filtros_dep
+        self.preseleccion = set(preseleccion or [])
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vp"):
+            yield Static(f"[b]{self.etiqueta}[/b] — cargando opciones…", id="vp-tit")
+            yield SelectionList(id="vp-list")
+            with Horizontal():
+                yield Button("Cancelar", id="vp-cancel")
+                yield Button("Aceptar ✓", id="vp-ok", variant="primary")
+
+    def on_mount(self) -> None:
+        self._cargar()
+
+    @work(thread=True)
+    def _cargar(self) -> None:
+        from .engine import catalogo_valores
+        try:
+            vals = catalogo_valores(self.col, self.filtros_dep)
+        except Exception:  # noqa: BLE001
+            vals = []
+        self.app.call_from_thread(self._poblar, vals)
+
+    def _poblar(self, vals) -> None:
+        sl = self.query_one("#vp-list", SelectionList)
+        for v in vals:
+            sl.add_option(Selection(v, v, v in self.preseleccion))
+        self.query_one("#vp-tit", Static).update(
+            f"[b]{self.etiqueta}[/b] — Espacio marca ✓ · {len(vals)} opciones")
+
+    @on(Button.Pressed, "#vp-ok")
+    def _ok(self) -> None:
+        self.dismiss(list(self.query_one("#vp-list", SelectionList).selected))
+
+    @on(Button.Pressed, "#vp-cancel")
+    def _cancel(self) -> None:
+        self.dismiss(None)
+
+
+class FiltrosScreen(ModalScreen):
+    """Menú de filtros avanzados: las 7 categorías + códigos manuales."""
+
+    CSS = f"""
+    FiltrosScreen {{ align: center middle; }}
+    #fs {{ border: round {AMARILLO}; background: $surface; padding: 1 2; width: 80%; height: auto; max-height: 90%; }}
+    #fs Button {{ width: 100%; margin: 0 0 1 0; }}
+    #fs-volver {{ width: auto; }}
+    """
+
+    def __init__(self, filtros_dep):
+        super().__init__()
+        self.filtros_dep = filtros_dep
+
+    @staticmethod
+    def _lbl(etiqueta, n):
+        return f"{etiqueta}" + (f"   ✓ {n}" if n else "")
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="fs"):
+            yield Static("[b]Filtros avanzados[/b] · catálogo de estaciones (opcional)", classes="titulo")
+            yield Static("Elige una categoría para filtrar; se combinan entre sí.", classes="pista")
+            for etiqueta, col in ATRIBUTOS_AVANZADOS.items():
+                n = len(self.app.avanzados.get(col, []))
+                yield Button(self._lbl(etiqueta, n), id=f"attr-{col}")
+            yield Label("Códigos de estación manuales (separados por coma):")
+            yield Input(value=", ".join(sorted(self.app.codigos_manuales)), id="fs-codigos")
+            yield Button("← Listo / Volver", id="fs-volver", variant="primary")
+
+    @on(Button.Pressed)
+    def _click(self, ev: Button.Pressed) -> None:
+        bid = ev.button.id or ""
+        if bid.startswith("attr-"):
+            col = bid[5:]
+            etiqueta = next(e for e, c in ATRIBUTOS_AVANZADOS.items() if c == col)
+            boton = ev.button
+
+            def cb(res, col=col, etiqueta=etiqueta, boton=boton):
+                if res is not None:
+                    self.app.avanzados[col] = res
+                    boton.label = self._lbl(etiqueta, len(res))
+
+            self.app.push_screen(
+                ValuePicker(etiqueta, col, self.filtros_dep, self.app.avanzados.get(col, [])), cb)
+        elif bid == "fs-volver":
+            txt = self.query_one("#fs-codigos", Input).value
+            self.app.codigos_manuales = {c.strip() for c in txt.split(",") if c.strip()}
+            self.dismiss()
 
 
 class IdeamTUI(App):
@@ -99,6 +202,11 @@ class IdeamTUI(App):
         self.sel_departamentos: list[str] = []
         self._anio_ini = self._anio_fin = ""
         self._con_csv = False
+        # filtros avanzados
+        self.filtros_base: list[str] = []
+        self.dict_reemplazo: dict = {}
+        self.avanzados: dict[str, list[str]] = {}
+        self.codigos_manuales: set[str] = set()
 
     # ---------- composición base ----------
     def compose(self) -> ComposeResult:
@@ -210,19 +318,37 @@ class IdeamTUI(App):
             SelectionList(*sels, id="lista-deptos"),
             Horizontal(
                 Button("← Atrás", id="atras"),
+                Button("Filtros avanzados ⚙", id="filtros-av"),
                 Button("Continuar →", id="cont-deptos", variant="primary"),
                 id="botones",
             ),
             classes="paso",
         )
 
+    def _filtro_dep_actual(self):
+        """Construye el filtro de depto desde la selección actual (o None si vacía)."""
+        sel = list(self.query_one("#lista-deptos", SelectionList).selected)
+        if not sel:
+            return None
+        filtro, reemplazos, _ = build_department_filter(sel, MAPEO_DEPARTAMENTOS)
+        self.sel_departamentos = sel
+        self.filtros_base = [filtro]
+        self.dict_reemplazo = reemplazos
+        return [filtro]
+
+    @on(Button.Pressed, "#filtros-av")
+    def _abrir_filtros(self) -> None:
+        fdep = self._filtro_dep_actual()
+        if fdep is None:
+            self.notify("Marca al menos un departamento antes de filtrar.", severity="warning")
+            return
+        self.push_screen(FiltrosScreen(fdep))
+
     @on(Button.Pressed, "#cont-deptos")
     def _cont_deptos(self) -> None:
-        sel = self.query_one("#lista-deptos", SelectionList).selected
-        if not sel:
+        if self._filtro_dep_actual() is None:
             self.notify("Marca al menos un departamento con Espacio.", severity="warning")
             return
-        self.sel_departamentos = list(sel)
         self.paso = 3
         self._render()
 
@@ -303,7 +429,7 @@ class IdeamTUI(App):
 
     @work(thread=True, exclusive=True)
     def _descargar_worker(self) -> None:
-        from .engine import descargar
+        from .engine import construir_tareas, descargar, resolver_pool_estaciones
 
         def on_progress(hechos, total, filas):
             pct = int(hechos / total * 100) if total else 100
@@ -311,12 +437,16 @@ class IdeamTUI(App):
 
         try:
             col = self.sel_dataset["fecha_col"]
-            filtro_dep, reemplazos, _ = build_department_filter(
-                self.sel_departamentos, MAPEO_DEPARTAMENTOS)
-            tareas = [(a, None, [filtro_dep]) for a in range(self._anio_ini, self._anio_fin + 1)]
+            pool = set(self.codigos_manuales)
+            if any(self.avanzados.values()):
+                self.call_from_thread(
+                    self.query_one("#estado", Static).update, "Resolviendo estaciones por filtros…")
+                pool |= resolver_pool_estaciones(self.filtros_base, self.avanzados)
+            tareas = construir_tareas(
+                self._anio_ini, self._anio_fin, self.filtros_base, pool, col)
             r = descargar(
-                self.sel_dataset["id"], col, tareas, reemplazos, self.sel_dataset["nombre"],
-                include_csv=self._con_csv, on_progress=on_progress,
+                self.sel_dataset["id"], col, tareas, self.dict_reemplazo,
+                self.sel_dataset["nombre"], include_csv=self._con_csv, on_progress=on_progress,
             )
             self.call_from_thread(self._ok, r)
         except Exception as exc:  # noqa: BLE001

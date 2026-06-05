@@ -12,10 +12,79 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .config import CLIENT, LIMIT, MAX_WORKERS
+from .config import CATALOG_DATASET_ID, CLIENT, LIMIT, MAX_WORKERS
 from .core import intentar
 from .exporting import export_by_department_municipality
 from .transform import deduplicate_observations, normalize_chunk
+
+# Atributos de filtro avanzado: etiqueta -> columna en la observación.
+# (la columna en el CATÁLOGO se traduce con _a_catalogo)
+ATRIBUTOS_AVANZADOS = {
+    "Zona Hidrográfica": "zonahidrografica",
+    "Categoría": "categoria",
+    "Tecnología": "tecnologia",
+    "Estado": "estado",
+    "Corriente": "corriente",
+    "Entidad": "entidad",
+    "Municipio": "municipio",
+}
+
+
+def _a_catalogo(clausula: str) -> str:
+    """Traduce nombres de columna de observación a los del catálogo hp9r-jxuu."""
+    return clausula.replace("zonahidrografica", "zona_hidrografica").replace(
+        "codigoestacion", "codigo"
+    )
+
+
+def catalogo_valores(attr_col: str, filtros_dep: list[str]) -> list[str]:
+    """Valores distintos de un atributo en el catálogo, dados los filtros de depto."""
+    c_cat = attr_col.replace("zonahidrografica", "zona_hidrografica")
+    where = " AND ".join(_a_catalogo(f) for f in filtros_dep) or None
+    rows = intentar(
+        lambda: CLIENT.get(CATALOG_DATASET_ID, select=c_cat, where=where, group=c_cat, limit=50000),
+        f"catalogo {attr_col}",
+    )
+    return sorted(str(r.get(c_cat)) for r in (rows or []) if r.get(c_cat))
+
+
+def resolver_pool_estaciones(filtros_dep: list[str], avanzados: dict[str, list[str]]) -> set[str]:
+    """Resuelve el conjunto de codigos de estacion que cumplen los filtros avanzados."""
+    clauses = [_a_catalogo(f) for f in filtros_dep]
+    for attr_col, vals in avanzados.items():
+        if not vals:
+            continue
+        c_cat = attr_col.replace("zonahidrografica", "zona_hidrografica")
+        quoted = ", ".join("'" + str(v).upper() + "'" for v in vals)
+        clauses.append(f"upper({c_cat}) IN ({quoted})")
+    where = " AND ".join(clauses) or None
+    rows = intentar(
+        lambda: CLIENT.get(CATALOG_DATASET_ID, select="codigo", where=where, limit=50000),
+        "pool estaciones",
+    )
+    return {r["codigo"] for r in (rows or []) if r.get("codigo")}
+
+
+def construir_tareas(anio_ini, anio_fin, filtros_base, estaciones_pool, col_fecha):
+    """Replica main.py paso 4: chunks de codigos (500) x años -> lista de tareas."""
+    est_norm = []
+    for c in estaciones_pool:
+        est_norm.append(f"'{c}'")
+        if len(str(c)) == 8:
+            est_norm.append(f"'00{c}'")
+
+    if est_norm:
+        filtros_api = []
+        for i in range(0, len(est_norm), 500):
+            chunk = est_norm[i:i + 500]
+            f_set = list(filtros_base) + [f"codigoestacion IN ({', '.join(chunk)})"]
+            filtros_api.append(f_set)
+    else:
+        filtros_api = [list(filtros_base)] if filtros_base else [[]]
+
+    if col_fecha and anio_ini and anio_fin:
+        return [(a, None, f) for a in range(anio_ini, anio_fin + 1) for f in filtros_api]
+    return [(None, None, f) for f in filtros_api]
 
 
 def _bajar_bloque(dataset_id, col_fecha, anio, mes, filtros, descripcion):
