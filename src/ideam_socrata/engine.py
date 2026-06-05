@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config import CATALOG_DATASET_ID, CLIENT, LIMIT, MAX_WORKERS
 from .core import intentar
-from .exporting import export_by_department_municipality
+from .exporting import export_by_department_municipality, write_coverage_report
 from .transform import deduplicate_observations, normalize_chunk
 
 # Atributos de filtro avanzado: etiqueta -> columna en la observación.
@@ -46,6 +46,44 @@ def catalogo_valores(attr_col: str, filtros_dep: list[str]) -> list[str]:
         f"catalogo {attr_col}",
     )
     return sorted(str(r.get(c_cat)) for r in (rows or []) if r.get(c_cat))
+
+
+def cobertura_filtro(dataset_id: str, col_fecha: str, filtros_dep: list[str]) -> dict:
+    """Sondea la cobertura REAL para el filtro elegido, antes de descargar.
+
+    - Estaciones del catálogo que cumplen el filtro (total y activas): rápido.
+    - Rango min/max de fechas CON el filtro aplicado: 1 solo intento con timeout
+      corto (en datasets gigantes Socrata no alcanza a responder; se omite).
+    Devuelve {'estaciones', 'activas', 'ini', 'fin'} con None donde no hubo dato.
+    """
+    import re
+
+    from sodapy import Socrata
+
+    from .config import APP_TOKEN, DOMAIN
+
+    info = {"estaciones": None, "activas": None, "ini": None, "fin": None}
+    try:
+        where = " AND ".join(_a_catalogo(f) for f in filtros_dep) or None
+        rows = CLIENT.get(CATALOG_DATASET_ID, select="estado, count(*) AS n",
+                          where=where, group="estado", limit=50)
+        info["estaciones"] = sum(int(r["n"]) for r in rows)
+        info["activas"] = sum(int(r["n"]) for r in rows
+                              if str(r.get("estado", "")).strip().upper().startswith("ACTIVA"))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        probe = Socrata(DOMAIN, APP_TOKEN, timeout=25)
+        where = " AND ".join(filtros_dep) or None
+        r = probe.get(dataset_id, select=f"min({col_fecha}) AS mn, max({col_fecha}) AS mx",
+                      where=where, limit=1)
+        if r:
+            mn, mx = str(r[0].get("mn")), str(r[0].get("mx"))
+            if re.search(r"\d{4}", mn) and re.search(r"\d{4}", mx):
+                info["ini"], info["fin"] = mn[:10], mx[:10]
+    except Exception:  # noqa: BLE001
+        pass
+    return info
 
 
 def resolver_pool_estaciones(filtros_dep: list[str], avanzados: dict[str, list[str]]) -> set[str]:
@@ -115,7 +153,7 @@ def _bajar_bloque(dataset_id, col_fecha, anio, mes, filtros, descripcion):
 
 def descargar(
     dataset_id, col_fecha, tareas, dict_reemplazo, var_nombre,
-    base_dir="data", include_csv=False, on_progress=None,
+    base_dir="data", include_csv=False, on_progress=None, query_info=None,
 ):
     """Descarga (estándar o especial) según las tareas dadas y exporta por carpetas.
 
@@ -150,10 +188,23 @@ def descargar(
                 "output_dir": base_dir, "seconds": round(time.time() - t0, 1)}
 
     df = normalize_chunk(resultados, dataset_id, col_fecha or "fechaobservacion", dict_reemplazo)
+    # Algunos datasets especiales nombran distinto las columnas geográficas;
+    # se crea el alias para que el export por carpetas (depto/municipio) funcione.
+    for destino, alternos in (("departamento", ("nombre_del_departamento",)),
+                              ("municipio", ("nombre_del_municipio",))):
+        if destino not in df.columns:
+            for alt in alternos:
+                if alt in df.columns:
+                    df[destino] = df[alt]
+                    break
     raw = len(df)
     df, dups = deduplicate_observations(df, col_fecha or "fechaobservacion")
     outputs = export_by_department_municipality(df, var_nombre, base_dir=base_dir, include_csv=include_csv)
     total_csv = sum(len(o["csv"]) for o in outputs)
+    reporte = write_coverage_report(
+        df, var_nombre, base_dir, date_column=col_fecha,
+        query_info=query_info, duplicates=dups,
+    )
 
     return {
         "rows": len(df),
@@ -162,5 +213,6 @@ def descargar(
         "files_parquet": len(outputs),
         "files_csv": total_csv,
         "output_dir": base_dir,
+        "report": reporte,
         "seconds": round(time.time() - t0, 1),
     }

@@ -339,14 +339,20 @@ class IdeamTUI(App):
             self._descargar_worker()
 
     def action_atras(self) -> None:
-        if 0 < self.paso < 4:
+        if not (0 < self.paso < 4):
+            return
+        if self.paso == 3 and not self._tiene_dep():
+            self.paso = 1  # el dataset no tiene paso de departamentos
+        else:
             self.paso -= 1
-            self._render()
+        self._render()
 
     def action_reiniciar(self) -> None:
         if self.paso == 4:
             self.paso, self.sel_dataset, self.sel_departamentos = 1, None, []
-            self._inicio = self._fin = ""
+            self._anio_ini = self._anio_fin = ""
+            self.filtros_base, self.dict_reemplazo = [], {}
+            self.avanzados, self.codigos_manuales = {}, set()
             self._render()
 
     # ---------- paso 0: aviso legal + presentación ----------
@@ -402,17 +408,35 @@ class IdeamTUI(App):
         ol.clear_options()
         ol.add_options(self._opciones_var(ev.value))
 
+    # --- ayudas de flujo: qué pasos aplican según el dataset ---
+    def _tiene_dep(self) -> bool:
+        d = self.sel_dataset or {}
+        return d.get("tipo") == "estandar" or bool(d.get("dep_col"))
+
+    def _tiene_anios(self) -> bool:
+        d = self.sel_dataset or {}
+        return d.get("tipo") == "estandar" or bool(d.get("fecha_real"))
+
+    def _dep_col(self) -> str:
+        return (self.sel_dataset or {}).get("dep_col", "departamento")
+
     @on(OptionList.OptionSelected, "#lista-var")
     def _eligio_var(self, ev: OptionList.OptionSelected) -> None:
         if ev.option_id == "__none__":
             return
         dataset = next(d for d in DATASETS_INFO if d["id"] == ev.option_id)
-        if dataset.get("tipo") != "estandar":
-            self.notify("Las variables 'especiales' se habilitarán en la próxima etapa.",
-                        severity="warning", timeout=6)
-            return
         self.sel_dataset = dataset
-        self.paso = 2
+        # limpiar estado de la consulta anterior
+        self.sel_departamentos = []
+        self.filtros_base, self.dict_reemplazo = [], {}
+        self.avanzados, self.codigos_manuales = {}, set()
+        self._anio_ini = self._anio_fin = ""
+        if self._tiene_dep():
+            self.paso = 2
+        elif self._tiene_anios():
+            self.paso = 3
+        else:
+            self.paso = 4  # especial sin filtros: descarga directa
         self._render()
 
     # ---------- paso 2: departamentos ----------
@@ -420,15 +444,19 @@ class IdeamTUI(App):
         sels = [Selection(dep.title(), dep) for dep in DEPARTAMENTOS]
         b_atras = Button("← Atrás", id="atras")
         b_atras.tooltip = "Vuelve a elegir la variable."
-        b_filtros = Button("Filtros avanzados ⚙", id="filtros-av")
-        b_filtros.tooltip = "Afina por zona hidrográfica, categoría, estación, corriente… (opcional)."
         b_cont = Button("Continuar →", id="cont-deptos", variant="primary")
-        b_cont.tooltip = "Pasa al rango de años."
+        b_cont.tooltip = "Pasa al rango de años." if self._tiene_anios() else "Pasa a la descarga."
+        botones = [b_atras]
+        if self.sel_dataset.get("tipo") == "estandar":
+            b_filtros = Button("Filtros avanzados ⚙", id="filtros-av")
+            b_filtros.tooltip = "Afina por zona hidrográfica, categoría, estación, corriente… (opcional)."
+            botones.append(b_filtros)
+        botones.append(b_cont)
         return Vertical(
             Static(f"Paso 2 · Departamentos · {self.sel_dataset['nombre']}", classes="titulo"),
             Static("↑↓ navegar · Espacio marca ✓ · puedes elegir varios", classes="pista"),
             SelectionList(*sels, id="lista-deptos"),
-            Horizontal(b_atras, b_filtros, b_cont, id="botones"),
+            Horizontal(*botones, id="botones"),
             classes="paso",
         )
 
@@ -438,6 +466,10 @@ class IdeamTUI(App):
         if not sel:
             return None
         filtro, reemplazos, _ = build_department_filter(sel, MAPEO_DEPARTAMENTOS)
+        dep_col = self._dep_col()
+        if dep_col != "departamento":
+            # datasets especiales con otro nombre de columna geográfica
+            filtro = filtro.replace("upper(departamento)", f"upper({dep_col})")
         self.sel_departamentos = sel
         self.filtros_base = [filtro]
         self.dict_reemplazo = reemplazos
@@ -456,7 +488,7 @@ class IdeamTUI(App):
         if self._filtro_dep_actual() is None:
             self.notify("Marca al menos un departamento con Espacio.", severity="warning")
             return
-        self.paso = 3
+        self.paso = 3 if self._tiene_anios() else 4
         self._render()
 
     @on(Button.Pressed, "#atras")
@@ -493,9 +525,10 @@ class IdeamTUI(App):
 
     @work(thread=True)
     def _detectar_anios(self) -> None:
-        """Consulta min/max año del dataset y prerellena los campos."""
+        """Consulta min/max año del dataset, y la cobertura real del filtro elegido."""
         from .config import CLIENT
         from .core import intentar
+        from .engine import cobertura_filtro
         import re
 
         col = self.sel_dataset["fecha_col"]
@@ -507,11 +540,28 @@ class IdeamTUI(App):
             gmax = int(re.search(r"\d{4}", str(rmax[0].get(col))).group())
         except Exception:  # noqa: BLE001
             gmin, gmax = 2001, 2026
-        self.call_from_thread(self._fijar_rango, gmin, gmax)
+        # la cobertura usa el Catálogo Nacional de Estaciones: solo aplica a los estándar
+        es_estandar = self.sel_dataset.get("tipo") == "estandar"
+        cob = cobertura_filtro(ds, col, self.filtros_base) if (self.filtros_base and es_estandar) else {}
+        self.call_from_thread(self._fijar_rango, gmin, gmax, cob)
 
-    def _fijar_rango(self, gmin: int, gmax: int) -> None:
-        self.query_one("#rango-info", Shimmer).detener(
-            f"[{GRIS}]Histórico disponible: [b]{gmin}–{gmax}[/b] · ajusta o deja así para todo[/]")
+    def _fijar_rango(self, gmin: int, gmax: int, cob: dict | None = None) -> None:
+        linea = f"[{GRIS}]Histórico del dataset: [b]{gmin}–{gmax}[/b][/]"
+        cob = cob or {}
+        partes = []
+        if cob.get("estaciones") is not None:
+            est = f"[b]{cob['estaciones']}[/b] estaciones en tu selección"
+            if cob.get("activas") is not None:
+                est += f" ([b]{cob['activas']}[/b] activas)"
+            partes.append(est)
+        if cob.get("ini"):
+            partes.append(f"con datos de [b]{cob['ini']} → {cob['fin']}[/b]")
+            # prerrellenar con el rango REAL del filtro, no el global
+            gmin = max(gmin, int(cob["ini"][:4]))
+            gmax = min(gmax, int(cob["fin"][:4]))
+        if partes:
+            linea += f"\n[{AMARILLO}]Tu filtro:[/] [{GRIS}]" + " · ".join(partes) + "[/]"
+        self.query_one("#rango-info", Shimmer).detener(linea)
         self.query_one("#f-ini", Input).value = str(gmin)
         self.query_one("#f-fin", Input).value = str(gmax)
 
@@ -556,7 +606,8 @@ class IdeamTUI(App):
             self.call_from_thread(self._set_prog, pct, filas, hechos, total, rate, eta)
 
         try:
-            col = self.sel_dataset["fecha_col"]
+            # para especiales sin fecha-timestamp se descarga directo (sin ventanas)
+            col = self.sel_dataset["fecha_col"] if self._tiene_anios() else None
             pool = set(self.codigos_manuales)
             if any(self.avanzados.values()):
                 self.call_from_thread(
@@ -564,9 +615,22 @@ class IdeamTUI(App):
                 pool |= resolver_pool_estaciones(self.filtros_base, self.avanzados)
             tareas = construir_tareas(
                 self._anio_ini, self._anio_fin, self.filtros_base, pool, col)
+            query_info = {
+                "Variable": self.sel_dataset["nombre"],
+                "Departamentos": ", ".join(self.sel_departamentos) or "Todos",
+            }
+            if self._anio_ini:
+                query_info["Años solicitados"] = f"{self._anio_ini}–{self._anio_fin}"
+            avanzados_activos = {k: v for k, v in self.avanzados.items() if v}
+            if avanzados_activos:
+                query_info["Filtros avanzados"] = "; ".join(
+                    f"{k}: {', '.join(v)}" for k, v in avanzados_activos.items())
+            if self.codigos_manuales:
+                query_info["Estaciones manuales"] = ", ".join(sorted(self.codigos_manuales))
             r = descargar(
                 self.sel_dataset["id"], col, tareas, self.dict_reemplazo,
-                self.sel_dataset["nombre"], include_csv=self._con_csv, on_progress=on_progress,
+                self.sel_dataset["nombre"], include_csv=self._con_csv,
+                on_progress=on_progress, query_info=query_info,
             )
             self.call_from_thread(self._ok, r)
         except Exception as exc:  # noqa: BLE001
@@ -603,7 +667,8 @@ class IdeamTUI(App):
                 + (f"   ([{GRIS}]{r['duplicates']:,} duplicados depurados[/])" if r.get("duplicates") else "")
                 + f"\n[{GRIS}]Archivos:[/] {r['files_parquet']} parquet · {r['files_csv']} csv\n"
                 f"[{GRIS}]Carpeta:[/] {r['output_dir']}/\n"
-                f"[{GRIS}]Tiempo:[/] {r['seconds']}s"
+                + (f"[{GRIS}]Resumen de cobertura:[/] {r['report']}\n" if r.get("report") else "")
+                + f"[{GRIS}]Tiempo:[/] {r['seconds']}s"
             )
         self.query_one("#estado", Static).update(
             msg + f"\n\n[{GRIS}]Pulsa [b]N[/b] para otra consulta o [b]Q[/b] para salir.[/]")

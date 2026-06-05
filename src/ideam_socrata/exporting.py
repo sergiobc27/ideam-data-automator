@@ -3,6 +3,8 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
 from .config import EXCEL_MAX_ROWS
 
 
@@ -37,6 +39,69 @@ def split_csv_by_excel_limit(df, output_base_path, max_rows=EXCEL_MAX_ROWS):
         output_paths.append(output_path)
 
     return output_paths
+
+
+def write_coverage_report(df, variable_name, base_dir, date_column=None,
+                          query_info=None, duplicates=0, timestamp=None):
+    """Escribe RESUMEN_<variable>_<stamp>.txt con la cobertura real de la descarga.
+
+    Incluye rango real de fechas, filas por estación con primera/última
+    observación y completitud mensual (% de meses del rango con >=1 dato).
+    Responde de antemano preguntas tipo '¿por qué solo hay datos desde 2016?':
+    la cobertura depende de cuándo se instalaron las estaciones automáticas.
+    """
+    base_path = Path(base_dir)
+    base_path.mkdir(parents=True, exist_ok=True)
+    stamp = timestamp or export_timestamp()
+    variable_part = safe_path_part(variable_name, "variable").lower()
+    report_path = base_path / f"RESUMEN_{variable_part}_{stamp}.txt"
+
+    lineas = [
+        "=" * 78,
+        f"RESUMEN DE DESCARGA — {variable_name}",
+        f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')} · IDEAM Data Automator",
+        "=" * 78,
+        "",
+    ]
+    for clave, valor in (query_info or {}).items():
+        lineas.append(f"{clave}: {valor}")
+
+    lineas.append(f"Filas únicas: {len(df):,}"
+                  + (f"  ({duplicates:,} duplicados depurados)" if duplicates else ""))
+
+    fechas = None
+    if date_column and date_column in df.columns:
+        fechas = pd.to_datetime(df[date_column], errors="coerce")
+        if fechas.notna().any():
+            lineas.append(
+                f"Rango real de los datos: {fechas.min():%Y-%m-%d} — {fechas.max():%Y-%m-%d}")
+
+    lineas.append("")
+    if "codigoestacion" in df.columns and fechas is not None and fechas.notna().any():
+        lineas += ["COBERTURA POR ESTACIÓN", "-" * 78]
+        grupo = df.assign(_fecha=fechas).groupby("codigoestacion", dropna=False)
+        for codigo, g in grupo:
+            nombre = str(g["nombreestacion"].iloc[0])[:30] if "nombreestacion" in g.columns else ""
+            muni = str(g["municipio"].iloc[0])[:18] if "municipio" in g.columns else ""
+            f = g["_fecha"].dropna()
+            if f.empty:
+                lineas.append(f"{codigo} | {nombre:30} | {muni:18} | {len(g):>10,} filas | sin fechas")
+                continue
+            meses_con_dato = f.dt.to_period("M").nunique()
+            meses_rango = max(1, (f.max().to_period("M") - f.min().to_period("M")).n + 1)
+            completitud = 100.0 * meses_con_dato / meses_rango
+            lineas.append(
+                f"{codigo} | {nombre:30} | {muni:18} | {len(g):>10,} filas | "
+                f"{f.min():%Y-%m-%d} → {f.max():%Y-%m-%d} | {completitud:5.1f}% de meses con dato"
+            )
+        lineas += [
+            "-" * 78,
+            "Nota: la cobertura inicia cuando se instaló cada estación automática;",
+            "la data histórica de estaciones convencionales no está en datos.gov.co (vive en DHIME).",
+        ]
+
+    report_path.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+    return str(report_path)
 
 
 def export_by_department_municipality(

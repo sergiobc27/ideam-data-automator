@@ -7,7 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ideam_socrata.exporting import export_by_department_municipality
+from ideam_socrata.exporting import export_by_department_municipality, write_coverage_report
 from ideam_socrata.query_validation import build_department_filter
 from ideam_socrata.transform import normalize_chunk
 
@@ -42,6 +42,64 @@ class QueryExportHelperTests(unittest.TestCase):
 
         self.assertEqual(df.loc[0, "departamento"], "ATLANTICO")
         self.assertIn("floating_id", df.columns)
+
+    def test_csv_dates_are_excel_friendly(self):
+        data = [
+            {
+                "codigoestacion": "1",
+                "codigosensor": "2",
+                "fechaobservacion": "2016-12-31T23:50:00.000",
+                "valorobservado": "5.4",
+                "departamento": "ATLANTICO",
+                "municipio": "BARRANQUILLA",
+            }
+        ]
+        df = normalize_chunk(data, "s54a-sgyg", "fechaobservacion")
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["fechaobservacion"]))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outputs = export_by_department_municipality(
+                df, "Precipitación", base_dir=tmpdir, include_csv=True, timestamp="1200_010126"
+            )
+            contenido = Path(outputs[0]["csv"][0]).read_text(encoding="utf-8-sig")
+            # sin la 'T': Excel lo reconoce como fecha y permite filtrar por año/mes/día
+            self.assertIn("2016-12-31 23:50:00", contenido)
+            self.assertNotIn("2016-12-31T23:50:00", contenido)
+
+    def test_coverage_report_lists_station_ranges(self):
+        df = pd.DataFrame(
+            {
+                "codigoestacion": ["0021195190"] * 3 + ["0029004520"] * 2,
+                "nombreestacion": ["LAS FLORES"] * 3 + ["ESCUELA NAVAL"] * 2,
+                "municipio": ["BARRANQUILLA"] * 5,
+                "fechaobservacion": pd.to_datetime(
+                    ["2016-06-10", "2016-07-01", "2020-01-15", "2019-03-01", "2026-01-01"]
+                ),
+                "valorobservado": [1.0, 2.0, 3.0, 4.0, 5.0],
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ruta = write_coverage_report(
+                df,
+                "Precipitación",
+                tmpdir,
+                date_column="fechaobservacion",
+                query_info={"Departamentos": "ATLANTICO", "Años solicitados": "2001–2026"},
+                duplicates=7,
+                timestamp="1200_010126",
+            )
+            contenido = Path(ruta).read_text(encoding="utf-8")
+
+        self.assertIn("RESUMEN DE DESCARGA — Precipitación", contenido)
+        self.assertIn("Departamentos: ATLANTICO", contenido)
+        self.assertIn("Filas únicas: 5", contenido)
+        self.assertIn("7 duplicados depurados", contenido)
+        self.assertIn("Rango real de los datos: 2016-06-10 — 2026-01-01", contenido)
+        self.assertIn("0021195190", contenido)
+        self.assertIn("2016-06-10 → 2020-01-15", contenido)
+        self.assertIn("0029004520", contenido)
+        self.assertIn("DHIME", contenido)
 
     def test_export_organizes_and_splits_csv(self):
         df = pd.DataFrame(

@@ -81,15 +81,23 @@ DATASETS_INFO = [
     {"nombre": "Nivel del Mar Máximo", "id": "uxy3-jchf", "fecha_col": "fechaobservacion", "tipo": "estandar"},
     {"nombre": "Nivel del Mar Mínimo", "id": "7z6g-yx9q", "fecha_col": "fechaobservacion", "tipo": "estandar"},
     
-    # Datasets Especiales
-    {"nombre": "Calidad Del Aire Promedio Anual", "id": "kekd-7v7h", "fecha_col": "a_o", "tipo": "especial"},
-    {"nombre": "Calidad del Aire en Colombia", "id": "g4t8-zkc3", "fecha_col": "med_fecha_inicio", "tipo": "especial"},
-    {"nombre": "Data histórica de calidad de agua", "id": "62gv-3857", "fecha_col": "fecha", "tipo": "especial"},
+    # Datasets Especiales.
+    # dep_col: columna de departamento (si existe) para poder filtrar.
+    # fecha_real: la columna de fecha es timestamp (permite rango de años);
+    #             si es False/ausente es un año/periodo en texto y se baja directo.
+    {"nombre": "Calidad Del Aire Promedio Anual", "id": "kekd-7v7h", "fecha_col": "a_o", "tipo": "especial",
+     "dep_col": "nombre_del_departamento"},
+    {"nombre": "Calidad del Aire en Colombia", "id": "g4t8-zkc3", "fecha_col": "med_fecha_inicio", "tipo": "especial",
+     "dep_col": "departamento", "fecha_real": True},
+    {"nombre": "Data histórica de calidad de agua", "id": "62gv-3857", "fecha_col": "fecha", "tipo": "especial",
+     "dep_col": "departamento", "fecha_real": True},
     {"nombre": "Zonificación Hidrográfica Colombia", "id": "5kjg-nuda", "fecha_col": None, "tipo": "especial"},
-    {"nombre": "Normales Climatológicas de Colombia", "id": "nsz2-kzcq", "fecha_col": "ao", "tipo": "especial"},
+    {"nombre": "Normales Climatológicas de Colombia", "id": "nsz2-kzcq", "fecha_col": "ao", "tipo": "especial",
+     "dep_col": "departamento"},
     {"nombre": "Inventario Nacional Gases Efecto Invernadero", "id": "6rff-a5ep", "fecha_col": "a_o", "tipo": "especial"},
     {"nombre": "Histórico mensual de escorrentía", "id": "kg4b-vx7j", "fecha_col": "mes_a_o", "tipo": "especial"},
-    {"nombre": "Catálogo Nacional de Estaciones", "id": CATALOG_DATASET_ID, "fecha_col": None, "tipo": "especial"}
+    {"nombre": "Catálogo Nacional de Estaciones", "id": CATALOG_DATASET_ID, "fecha_col": None, "tipo": "especial",
+     "dep_col": "departamento"}
 ]
 
 MAPEO_DEPARTAMENTOS = {
