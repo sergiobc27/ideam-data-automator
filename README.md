@@ -98,10 +98,6 @@ src/ideam_socrata/
 tests/                 # Pruebas unitarias
 ```
 
-> El repositorio incluye además un **modo servidor** opcional (espejo
-> PostgreSQL/TimescaleDB + API) para uso avanzado: ver
-> [`docs/SERVIDOR.md`](docs/SERVIDOR.md). No es necesario para la herramienta local.
-
 ## Pruebas
 
 ```powershell
