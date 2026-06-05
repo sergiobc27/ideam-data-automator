@@ -1,5 +1,10 @@
 # IDEAM Data Automator
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20562858.svg)](https://doi.org/10.5281/zenodo.20562858)
+[![PyPI](https://img.shields.io/pypi/v/ideam-data-automator.svg)](https://pypi.org/project/ideam-data-automator/)
+[![Python](https://img.shields.io/pypi/pyversions/ideam-data-automator.svg)](https://pypi.org/project/ideam-data-automator/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 Herramienta en Python para **extraer, validar, organizar y descargar** datos
 hidrometeorológicos del IDEAM publicados en Socrata / Datos Abiertos Colombia
 (`www.datos.gov.co`), directamente a tu PC.

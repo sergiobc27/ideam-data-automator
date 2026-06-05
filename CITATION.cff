@@ -16,6 +16,7 @@ authors:
     affiliation: "Universidad de la Costa (CUC), Barranquilla, Colombia"
 version: "1.0.2"
 date-released: "2026-06-05"
+doi: 10.5281/zenodo.20562858
 license: Apache-2.0
 repository-code: "https://github.com/sergiobc27/ideam-data-automator"
 url: "https://ideam.sergiobc.com"
