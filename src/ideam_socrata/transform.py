@@ -32,7 +32,16 @@ def add_floating_id(df, dataset_id, col_fecha):
 
     codigo = df["codigoestacion"].astype(str) if "codigoestacion" in df.columns else pd.Series([""] * len(df), index=df.index)
     sensor = df["codigosensor"].astype(str) if "codigosensor" in df.columns else pd.Series([""] * len(df), index=df.index)
-    fecha = df[col_fecha].astype(str) if col_fecha in df.columns else pd.Series([""] * len(df), index=df.index)
+    if col_fecha in df.columns:
+        serie_fecha = df[col_fecha]
+        if pd.api.types.is_datetime64_any_dtype(serie_fecha):
+            # Mismo formato ISO-T que producia la version string: los hashes
+            # historicos (DB) dependen de el y NO debe cambiar.
+            fecha = serie_fecha.dt.strftime("%Y-%m-%dT%H:%M:%S")
+        else:
+            fecha = serie_fecha.astype(str)
+    else:
+        fecha = pd.Series([""] * len(df), index=df.index)
     df["floating_id"] = [
         _stable_hash((dataset_id, codigo, cod_sensor, fecha_obs))
         for codigo, cod_sensor, fecha_obs in zip(codigo, sensor, fecha)
@@ -65,8 +74,9 @@ def normalize_chunk(data, dataset_id, col_fecha="fechaobservacion", dict_reempla
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     if col_fecha and col_fecha in df.columns:
-        parsed = pd.to_datetime(df[col_fecha], errors="coerce")
-        df[col_fecha] = parsed.dt.strftime("%Y-%m-%dT%H:%M:%S")
+        # Fecha REAL (datetime64), no texto: Parquet guarda timestamp nativo y
+        # el CSV se escribe en formato que Excel reconoce como fecha (ver exporting).
+        df[col_fecha] = pd.to_datetime(df[col_fecha], errors="coerce")
 
     df["source_dataset_id"] = dataset_id
     add_floating_id(df, dataset_id, col_fecha)

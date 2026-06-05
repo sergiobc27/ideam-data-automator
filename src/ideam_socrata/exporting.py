@@ -28,7 +28,12 @@ def split_csv_by_excel_limit(df, output_base_path, max_rows=EXCEL_MAX_ROWS):
     for idx, start in enumerate(range(0, len(df), max_data_rows), start=1):
         suffix = "" if idx == 1 else f"_{idx}"
         output_path = output_base_path.with_name(f"{output_base_path.stem}{suffix}{output_base_path.suffix}")
-        df.iloc[start:start + max_data_rows].to_csv(output_path, index=False, encoding="utf-8-sig")
+        # date_format sin la 'T': Excel lo reconoce como fecha y permite
+        # filtrar/ordenar cronologicamente (no como texto).
+        df.iloc[start:start + max_data_rows].to_csv(
+            output_path, index=False, encoding="utf-8-sig",
+            date_format="%Y-%m-%d %H:%M:%S",
+        )
         output_paths.append(output_path)
 
     return output_paths
