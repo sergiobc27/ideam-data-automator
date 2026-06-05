@@ -125,8 +125,8 @@ legado del proyecto.
 
 ## 6. El salto a la web (abril–mayo 2026)
 
-La siguiente ambición: que nadie necesitara instalar nada. Se diseñó una
-interfaz en **Figma**, se materializó en **React + Vite**, y se desplegó como
+La siguiente ambición: que nadie necesitara instalar nada. Se diseñó la
+interfaz de usuario, se materializó en **React + Vite**, y se desplegó como
 **Cloudflare Worker** en `ideam.sergiobc.com`.
 
 Esta era — "Socrata en vivo" — fue una lección de arquitectura: cada consulta
