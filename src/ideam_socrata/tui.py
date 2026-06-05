@@ -13,9 +13,12 @@ Lanzar con:  ideam-socrata tui
 
 from __future__ import annotations
 
+import time
+
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
+from textual.content import Content
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -99,8 +102,10 @@ def emoji_de(nombre: str) -> str:
     return "📊"
 
 
-# Banda de colores para el efecto shimmer (oscuro → brillante → oscuro).
-_SHIMMER = ["#6b6b6b", "#8a6d0e", "#C9A227", "#FCD116", "#C9A227", "#8a6d0e", "#6b6b6b"]
+# Banda de colores para el efecto shimmer (oscuro → MUY brillante → oscuro).
+_SHIMMER = ["#4a4a4a", "#6b6b6b", "#8a6d0e", "#C9A227", "#FCD116",
+            "#FFF3A0", "#FCD116", "#C9A227", "#8a6d0e", "#6b6b6b", "#4a4a4a"]
+_SHIMMER_BASE = "#4a4a4a"
 
 
 class Shimmer(Static):
@@ -131,7 +136,7 @@ class Shimmer(Static):
         if texto_final is not None:
             self.update(texto_final)
 
-    def _render(self) -> Text:
+    def _render(self) -> Content:
         t = Text()
         centro = self._pos
         for i, ch in enumerate(self._texto):
@@ -141,7 +146,7 @@ class Shimmer(Static):
             else:
                 color = _SHIMMER[0]
             t.append(ch, style=color)
-        return t
+        return Content.from_rich_text(t)
 
 
 class ValuePicker(ModalScreen):
@@ -251,6 +256,7 @@ class IdeamTUI(App):
     CSS = f"""
     Screen {{ align: center top; }}
     #logo {{ color: {ROJO}; padding: 0; height: auto; }}
+    #tagline {{ text-align: center; text-style: bold; padding: 1 0 0 0; height: auto; }}
     #cuerpo {{ height: 1fr; }}
     .paso {{ border: round {AMARILLO}; padding: 1 2; margin: 1 2; height: auto; }}
     .legal {{ border: round {ROJO}; padding: 1 2; margin: 1 2; height: auto; }}
@@ -319,7 +325,11 @@ class IdeamTUI(App):
         cuerpo.remove_children()
         builder = {0: self._aviso, 1: self._variables, 2: self._departamentos,
                    3: self._anios, 4: self._descarga}[self.paso]
-        cuerpo.mount(builder())
+        panel = builder()
+        cuerpo.mount(panel)
+        # transición suave: aparece con un leve fundido
+        panel.styles.opacity = 0.0
+        panel.styles.animate("opacity", value=1.0, duration=0.28)
         foco = {1: "#buscar-var", 2: "#lista-deptos", 3: "#f-ini"}.get(self.paso)
         if foco:
             self.call_after_refresh(lambda s=foco: self.query_one(s).focus())
@@ -341,15 +351,17 @@ class IdeamTUI(App):
 
     # ---------- paso 0: aviso legal + presentación ----------
     def _aviso(self) -> Vertical:
+        rechazar = Button("No acepto (salir)", id="rechazar")
+        rechazar.tooltip = "Cierra el asistente sin descargar nada."
+        aceptar = Button("Acepto los términos →", id="aceptar", variant="primary")
+        aceptar.tooltip = "Aceptas el uso académico e investigativo y entras al asistente."
         return Vertical(
-            Static(build_logo_text(), id="logo"),
+            Static(Content.from_rich_text(build_logo_text()), id="logo"),
+            Shimmer("» Descarga, valida y organiza datos hídricos del IDEAM — sin límites «",
+                    id="tagline"),
             Static(PRESENTACION, classes="presentacion"),
             Static(AVISO_LEGAL, classes="legal"),
-            Horizontal(
-                Button("No acepto (salir)", id="rechazar"),
-                Button("Acepto los términos →", id="aceptar", variant="primary"),
-                id="botones",
-            ),
+            Horizontal(rechazar, aceptar, id="botones"),
             classes="paso",
         )
 
@@ -406,16 +418,17 @@ class IdeamTUI(App):
     # ---------- paso 2: departamentos ----------
     def _departamentos(self) -> Vertical:
         sels = [Selection(dep.title(), dep) for dep in DEPARTAMENTOS]
+        b_atras = Button("← Atrás", id="atras")
+        b_atras.tooltip = "Vuelve a elegir la variable."
+        b_filtros = Button("Filtros avanzados ⚙", id="filtros-av")
+        b_filtros.tooltip = "Afina por zona hidrográfica, categoría, estación, corriente… (opcional)."
+        b_cont = Button("Continuar →", id="cont-deptos", variant="primary")
+        b_cont.tooltip = "Pasa al rango de años."
         return Vertical(
             Static(f"Paso 2 · Departamentos · {self.sel_dataset['nombre']}", classes="titulo"),
             Static("↑↓ navegar · Espacio marca ✓ · puedes elegir varios", classes="pista"),
             SelectionList(*sels, id="lista-deptos"),
-            Horizontal(
-                Button("← Atrás", id="atras"),
-                Button("Filtros avanzados ⚙", id="filtros-av"),
-                Button("Continuar →", id="cont-deptos", variant="primary"),
-                id="botones",
-            ),
+            Horizontal(b_atras, b_filtros, b_cont, id="botones"),
             classes="paso",
         )
 
@@ -465,12 +478,18 @@ class IdeamTUI(App):
                 id="lista-opciones",
             ),
             Horizontal(
-                Button("← Atrás", id="atras"),
-                Button("Descargar ⬇", id="descargar", variant="primary"),
+                self._con_tip(Button("← Atrás", id="atras"), "Vuelve a departamentos."),
+                self._con_tip(Button("Descargar ⬇", id="descargar", variant="primary"),
+                              "Inicia la descarga con los filtros elegidos."),
                 id="botones",
             ),
             classes="paso",
         )
+
+    @staticmethod
+    def _con_tip(boton: Button, texto: str) -> Button:
+        boton.tooltip = texto
+        return boton
 
     @work(thread=True)
     def _detectar_anios(self) -> None:
@@ -527,9 +546,14 @@ class IdeamTUI(App):
     def _descargar_worker(self) -> None:
         from .engine import construir_tareas, descargar, resolver_pool_estaciones
 
+        t0 = time.time()
+
         def on_progress(hechos, total, filas):
+            elapsed = max(time.time() - t0, 0.001)
+            rate = filas / elapsed
+            eta = (total - hechos) / hechos * elapsed if hechos else 0
             pct = int(hechos / total * 100) if total else 100
-            self.call_from_thread(self._set_prog, pct, filas)
+            self.call_from_thread(self._set_prog, pct, filas, hechos, total, rate, eta)
 
         try:
             col = self.sel_dataset["fecha_col"]
@@ -548,9 +572,23 @@ class IdeamTUI(App):
         except Exception as exc:  # noqa: BLE001
             self.call_from_thread(self._err, f"Error: {exc}")
 
-    def _set_prog(self, pct: int, filas: int) -> None:
+    def _set_prog(self, pct: int, filas: int, hechos: int = 0, total: int = 0,
+                  rate: float = 0.0, eta: float = 0.0) -> None:
         self.query_one("#barra", ProgressBar).update(progress=pct)
-        self.query_one("#estado", Static).update(f"[{AMARILLO}]{filas:,} filas descargadas[/]")
+        bloques = f"bloque [b]{hechos}/{total}[/b]" if total else ""
+        vel = f"[{GRIS}]·[/] [{AMARILLO}]{rate:,.0f} filas/s[/]" if rate else ""
+        falta = f"[{GRIS}]· ~{self._fmt_dur(eta)} restante[/]" if eta else ""
+        self.query_one("#estado", Static).update(
+            f"[{AMARILLO}]{filas:,}[/] filas  [{GRIS}]{bloques}[/]  {vel} {falta}".strip())
+
+    @staticmethod
+    def _fmt_dur(seg: float) -> str:
+        seg = int(seg)
+        if seg < 60:
+            return f"{seg}s"
+        if seg < 3600:
+            return f"{seg // 60}m {seg % 60}s"
+        return f"{seg // 3600}h {(seg % 3600) // 60}m"
 
     def _ok(self, r: dict) -> None:
         self.query_one("#barra", ProgressBar).update(progress=100)
