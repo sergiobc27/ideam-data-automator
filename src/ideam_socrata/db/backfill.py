@@ -313,6 +313,77 @@ def backfill_year(conn, dataset, year, chunksize):
     )
 
 
+# ============================================================
+# Modo POR AÑO (carga año-a-año comprimiendo cada año al cerrarlo)
+# Necesario porque los 745M descomprimidos no caben en 200GB:
+# en todo momento solo 1 año queda descomprimido; al terminar
+# todos los datasets de un año, ese año se comprime (rapido, sin
+# el problema de insertar en chunks ya comprimidos).
+# ============================================================
+
+def _load_dataset_year(dataset, year, chunksize):
+    """Descarga+carga un (dataset, año) en su PROPIA conexion (seguro en hilos)."""
+    try:
+        with get_conn() as conn:
+            return backfill_year(conn, dataset, year, chunksize)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Fallo %s %s: %s", dataset["id"], year, exc)
+        return -1  # marca de error sin abortar todo el año
+
+
+def compress_year(conn, year):
+    """Comprime los chunks del año indicado (ya no recibiran mas inserts)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM (SELECT compress_chunk(c, if_not_compressed => true) "
+            "FROM show_chunks('observaciones', "
+            "newer_than => %s::timestamptz, older_than => %s::timestamptz) c) s",
+            (f"{year}-01-01", f"{year + 1}-01-01"),
+        )
+        n = cur.fetchone()[0]
+    conn.commit()
+    return n
+
+
+def _years_done(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT chunk_key FROM ingest_state WHERE grain='year' AND status='done'"
+        )
+        return {r[0] for r in cur.fetchall()}
+
+
+def backfill_by_year(conn, datasets, chunksize, workers=4):
+    """Carga año por año (descendente), comprimiendo cada año al terminarlo."""
+    # rango de años por dataset (una sola consulta liviana a Socrata)
+    ds_years = {}
+    for d in datasets:
+        years = set(year_range(d["id"], d["fecha_col"]))
+        ds_years[d["id"]] = years
+        logger.info("Rango %s: %s-%s (%s años)", d["id"],
+                    min(years) if years else "-", max(years) if years else "-", len(years))
+
+    all_years = sorted(set().union(*ds_years.values()), reverse=True)
+    done = _years_done(conn)
+    pendientes = [y for y in all_years if str(y) not in done]
+    print(f"AÑOS a procesar: {len(pendientes)} (de {min(all_years)} a {max(all_years)}), "
+          f"descendente, {workers} datasets en paralelo por año", flush=True)
+
+    for year in pendientes:
+        t0 = time.time()
+        objetivos = [d for d in datasets if year in ds_years[d["id"]]]
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"y{year}") as pool:
+            resultados = list(pool.map(lambda d: _load_dataset_year(d, year, chunksize), objetivos))
+        filas = sum(r for r in resultados if r > 0)
+        errores = sum(1 for r in resultados if r < 0)
+        # comprimir el año recien cerrado (libera disco antes del siguiente)
+        comp = compress_year(conn, year)
+        estado = "done" if errores == 0 else "error"
+        state.mark(conn, "__year__", "year", str(year), estado, rows_loaded=filas)
+        print(f"  AÑO {year}: {filas:,} filas, {comp} chunks comprimidos, "
+              f"{errores} datasets con error, {(time.time()-t0)/60:.1f} min", flush=True)
+
+
 def _process_year(dataset, year, chunksize):
     """Procesa un anio completo en su PROPIA conexion (seguro para hilos).
 
@@ -418,8 +489,12 @@ def main():
     parser.add_argument("--end-year", type=int, default=None)
     parser.add_argument("--compress", action="store_true", help="comprimir chunks al terminar")
     parser.add_argument(
+        "--mode", choices=["dataset", "year"], default="dataset",
+        help="'year': carga año-a-año comprimiendo cada año (cabe en disco). 'dataset': por dataset.",
+    )
+    parser.add_argument(
         "--workers", type=int, default=int(os.getenv("BACKFILL_WORKERS", "4")),
-        help="ventanas en paralelo por dataset (default 4; doc Socrata sugiere 2-4)",
+        help="paralelismo (default 4; doc Socrata sugiere 2-4)",
     )
     args = parser.parse_args()
 
@@ -437,6 +512,11 @@ def main():
             raise SystemExit(f"Dataset {args.dataset} no esta en DATASETS_INFO (tipo estandar).")
 
     with get_conn() as conn:
+        if args.mode == "year":
+            backfill_by_year(conn, objetivos, args.chunksize, workers=args.workers)
+            print("Backfill por año finalizado.", flush=True)
+            return
+
         gran_total = 0
         for dataset in objetivos:
             gran_total += backfill_dataset(
