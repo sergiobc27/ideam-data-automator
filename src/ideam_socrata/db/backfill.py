@@ -11,9 +11,11 @@ Uso:
 """
 
 import argparse
+import itertools
 import logging
 import os
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -22,6 +24,22 @@ import pandas as pd
 import requests
 
 from ..config import APP_TOKEN, DOMAIN, MAPEO_DEPARTAMENTOS, DATASETS_INFO, CLIENT
+
+# Pool de App Tokens para ROTACIÓN (reparte la carga y evita re-throttlear uno
+# solo). Se lee de SOCRATA_APP_TOKENS (coma-separado); si no, usa el unico.
+_TOKEN_POOL = [t.strip() for t in os.getenv("SOCRATA_APP_TOKENS", "").split(",") if t.strip()]
+if not _TOKEN_POOL and APP_TOKEN:
+    _TOKEN_POOL = [APP_TOKEN]
+_token_cycle = itertools.cycle(_TOKEN_POOL) if _TOKEN_POOL else None
+_token_lock = threading.Lock()
+
+
+def _next_token():
+    """Devuelve el siguiente token del pool (round-robin, seguro en hilos)."""
+    if not _token_cycle:
+        return None
+    with _token_lock:
+        return next(_token_cycle)
 from ..transform import deduplicate_observations, normalize_chunk
 from . import state
 from .connection import get_conn
@@ -212,8 +230,9 @@ def download_window_csv(dataset_id, col_fecha, start_iso, end_iso, attempts=3):
            "--data-urlencode", "$limit=500000000",
            "-o", str(part),
            f"{domain}/resource/{dataset_id}.csv"]
-    if APP_TOKEN:
-        cmd[1:1] = ["-H", f"X-App-Token: {APP_TOKEN}"]
+    tok = _next_token()
+    if tok:
+        cmd[1:1] = ["-H", f"X-App-Token: {tok}"]
 
     for i in range(attempts):
         try:
