@@ -255,14 +255,14 @@ class IdeamTUI(App):
 
     CSS = f"""
     Screen {{ align: center top; }}
-    #logo {{ color: {ROJO}; padding: 0; height: auto; }}
+    #logo {{ color: {ROJO}; padding: 0; height: auto; text-align: center; }}
     #tagline {{ text-align: center; text-style: bold; padding: 1 0 0 0; height: auto; }}
-    #cuerpo {{ height: 1fr; }}
-    .paso {{ border: round {AMARILLO}; padding: 1 2; margin: 1 2; height: auto; }}
+    #cuerpo {{ height: 1fr; align: center top; }}
+    .paso {{ border: round {AMARILLO}; padding: 1 2; margin: 1 2; height: auto; max-width: 112; }}
     .legal {{ border: round {ROJO}; padding: 1 2; margin: 1 2; height: auto; }}
     .titulo {{ color: {AMARILLO}; text-style: bold; margin-bottom: 1; }}
     .pista {{ color: {GRIS}; }}
-    .presentacion {{ color: {GRIS}; padding: 0 2; }}
+    .presentacion {{ color: {GRIS}; padding: 0 2; text-align: center; }}
     OptionList {{ height: auto; max-height: 18; }}
     SelectionList {{ height: auto; max-height: 18; }}
     Input {{ margin: 1 0; }}
@@ -270,7 +270,7 @@ class IdeamTUI(App):
     #fila-fechas Vertical {{ width: 1fr; padding-right: 2; height: auto; }}
     #botones {{ height: auto; align: center middle; padding-top: 1; }}
     Button {{ margin: 0 1; }}
-    #resumen {{ border: round {GRIS}; padding: 0 1; margin: 0 2; color: {GRIS}; height: auto; }}
+    #resumen {{ border: round {GRIS}; padding: 0 1; margin: 0 2; color: {GRIS}; height: auto; max-width: 112; }}
     #estado {{ padding: 1 0; }}
     ProgressBar {{ margin: 1 0; }}
     """
