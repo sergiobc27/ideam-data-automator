@@ -4,13 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ideam-hydrology-data-automator"
-version = "0.1.0"
-description = "Pipeline para extraer, validar y organizar datos hidrologicos IDEAM desde Socrata."
+version = "1.0.0"
+description = "Pipeline para extraer, validar y organizar datos hidrometeorologicos del IDEAM (Colombia) desde Socrata/Datos Abiertos."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [
   { name = "Sergio Beltran Coley" }
+]
+keywords = ["IDEAM", "hidrologia", "socrata", "datos-abiertos", "colombia", "precipitacion"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Natural Language :: Spanish",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Hydrology",
 ]
 dependencies = [
   "pandas",
@@ -28,6 +40,12 @@ server = [
   "psycopg[binary]>=3.1",
   "requests",
 ]
+
+[project.urls]
+Homepage = "https://ideam.sergiobc.com"
+Repository = "https://github.com/sergiobc27/ideam-data-automator"
+Issues = "https://github.com/sergiobc27/ideam-data-automator/issues"
+Changelog = "https://github.com/sergiobc27/ideam-data-automator/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ideam-socrata = "ideam_socrata.cli:main"

@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+message: >-
+  Si usas este software en tu investigación, por favor cítalo
+  usando los siguientes metadatos.
+type: software
+title: "IDEAM Data Automator"
+abstract: >-
+  Automatización inteligente para la gestión de datos hidrometeorológicos
+  del IDEAM (Colombia): extracción, validación, homologación territorial y
+  organización de los datasets abiertos de Socrata/Datos Abiertos Colombia,
+  con interfaz de terminal interactiva, modo por lotes y modo servidor
+  (espejo PostgreSQL/TimescaleDB con API HTTP).
+authors:
+  - family-names: "Beltrán Coley"
+    given-names: "Sergio"
+    affiliation: "Universidad de la Costa (CUC), Barranquilla, Colombia"
+version: "1.0.0"
+date-released: "2026-06-05"
+license: Apache-2.0
+repository-code: "https://github.com/sergiobc27/ideam-data-automator"
+url: "https://ideam.sergiobc.com"
+keywords:
+  - IDEAM
+  - hidrología
+  - hidrometeorología
+  - datos abiertos
+  - Socrata
+  - Colombia
+  - precipitación
+  - automatización
+  - ingeniería civil
+references:
+  - type: thesis
+    title: >-
+      Automatización inteligente para la gestión visual de datos hídricos
+      del IDEAM
+    authors:
+      - family-names: "Beltrán Coley"
+        given-names: "Sergio"
+    institution:
+      name: "Universidad de la Costa (CUC)"
+    year: 2026

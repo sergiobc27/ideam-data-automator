@@ -1,0 +1,31 @@
+{
+  "title": "IDEAM Data Automator",
+  "description": "Automatización inteligente para la gestión de datos hidrometeorológicos del IDEAM (Colombia): extracción, validación, homologación territorial y organización de los datasets abiertos de Socrata/Datos Abiertos Colombia, con interfaz de terminal interactiva, modo por lotes y modo servidor (espejo PostgreSQL/TimescaleDB con API HTTP).",
+  "creators": [
+    {
+      "name": "Beltrán Coley, Sergio",
+      "affiliation": "Universidad de la Costa (CUC), Barranquilla, Colombia"
+    }
+  ],
+  "license": "Apache-2.0",
+  "upload_type": "software",
+  "language": "spa",
+  "keywords": [
+    "IDEAM",
+    "hidrología",
+    "hidrometeorología",
+    "datos abiertos",
+    "Socrata",
+    "Colombia",
+    "precipitación",
+    "automatización",
+    "ingeniería civil"
+  ],
+  "related_identifiers": [
+    {
+      "relation": "isSupplementTo",
+      "identifier": "https://github.com/sergiobc27/ideam-data-automator",
+      "resource_type": "software"
+    }
+  ]
+}
