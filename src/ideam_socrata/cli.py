@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     try:
         from importlib.metadata import version as _pkg_version
 
-        _version = _pkg_version("ideam-hydrology-data-automator")
+        _version = _pkg_version("ideam-data-automator")
     except Exception:  # noqa: BLE001
         _version = "dev"
     parser.add_argument("--version", action="version", version=f"ideam-socrata {_version}")
