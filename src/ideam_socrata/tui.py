@@ -13,6 +13,7 @@ Lanzar con:  ideam-socrata tui
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -64,6 +65,85 @@ AVISO_LEGAL = (
 )
 
 
+def emoji_de(nombre: str) -> str:
+    """Emoji representativo según la variable."""
+    n = nombre.lower()
+    if "precipita" in n:
+        return "🌧️"
+    if "viento" in n:
+        return "💨"
+    if "mar" in n:
+        return "🌊"
+    if "presión" in n or "presion" in n:
+        return "🧭"
+    if "humedad" in n:
+        return "💧"
+    if "temperatura" in n:
+        return "🌡️"
+    if "rio" in n or "río" in n:
+        return "🏞️"
+    if "aire" in n:
+        return "🌫️"
+    if "agua" in n:
+        return "🚰"
+    if "zonifica" in n:
+        return "🗺️"
+    if "normales" in n:
+        return "📈"
+    if "gases" in n or "invernadero" in n:
+        return "☁️"
+    if "escorrent" in n:
+        return "💦"
+    if "estaciones" in n:
+        return "📍"
+    return "📊"
+
+
+# Banda de colores para el efecto shimmer (oscuro → brillante → oscuro).
+_SHIMMER = ["#6b6b6b", "#8a6d0e", "#C9A227", "#FCD116", "#C9A227", "#8a6d0e", "#6b6b6b"]
+
+
+class Shimmer(Static):
+    """Texto con un brillo en movimiento (efecto 'cargando' fluido tipo Claude)."""
+
+    def __init__(self, texto: str = "", **kw) -> None:
+        super().__init__(**kw)
+        self._texto = texto
+        self._pos = 0
+        self._timer = None
+
+    def set_texto(self, texto: str) -> None:
+        self._texto = texto
+        self._pos = 0
+
+    def on_mount(self) -> None:
+        self._timer = self.set_interval(0.09, self._tick)
+
+    def _tick(self) -> None:
+        self._pos = (self._pos + 1) % (len(self._texto) + len(_SHIMMER) + 6)
+        self.update(self._render())
+
+    def detener(self, texto_final: str | None = None) -> None:
+        """Detiene la animación y deja un texto fijo."""
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        if texto_final is not None:
+            self.update(texto_final)
+
+    def _render(self) -> Text:
+        t = Text()
+        centro = self._pos
+        for i, ch in enumerate(self._texto):
+            dist = i - centro
+            if 0 <= dist < len(_SHIMMER):
+                color = _SHIMMER[dist]
+            else:
+                color = _SHIMMER[0]
+            t.append(ch, style=color)
+        return t
+
+
 class ValuePicker(ModalScreen):
     """Selector multi-valor de un atributo del catálogo (carga en vivo)."""
 
@@ -80,7 +160,7 @@ class ValuePicker(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="vp"):
-            yield Static(f"[b]{self.etiqueta}[/b] — cargando opciones…", id="vp-tit")
+            yield Shimmer(f"⏳ Cargando opciones de {self.etiqueta}…", id="vp-tit")
             yield SelectionList(id="vp-list")
             with Horizontal():
                 yield Button("Cancelar", id="vp-cancel")
@@ -102,7 +182,7 @@ class ValuePicker(ModalScreen):
         sl = self.query_one("#vp-list", SelectionList)
         for v in vals:
             sl.add_option(Selection(v, v, v in self.preseleccion))
-        self.query_one("#vp-tit", Static).update(
+        self.query_one("#vp-tit", Shimmer).detener(
             f"[b]{self.etiqueta}[/b] — Espacio marca ✓ · {len(vals)} opciones")
 
     @on(Button.Pressed, "#vp-ok")
@@ -240,7 +320,7 @@ class IdeamTUI(App):
         builder = {0: self._aviso, 1: self._variables, 2: self._departamentos,
                    3: self._anios, 4: self._descarga}[self.paso]
         cuerpo.mount(builder())
-        foco = {1: "#lista-var", 2: "#lista-deptos", 3: "#f-ini"}.get(self.paso)
+        foco = {1: "#buscar-var", 2: "#lista-deptos", 3: "#f-ini"}.get(self.paso)
         if foco:
             self.call_after_refresh(lambda s=foco: self.query_one(s).focus())
         if self.paso == 3:
@@ -283,23 +363,37 @@ class IdeamTUI(App):
         self.exit(message="Acceso denegado: no se aceptaron los términos.")
 
     # ---------- paso 1: variable (las 21) ----------
-    def _variables(self) -> Vertical:
-        opciones = []
+    def _opciones_var(self, filtro: str = "") -> list[Option]:
+        f = filtro.strip().lower()
+        ops = []
         for d in DATASETS_INFO:
-            etiqueta = d["nombre"]
+            if f and f not in d["nombre"].lower():
+                continue
+            etiqueta = f"{emoji_de(d['nombre'])}  {d['nombre']}"
             if d.get("tipo") == "especial":
                 etiqueta += "  [dim](especial)[/dim]"
-            opciones.append(Option(etiqueta, id=d["id"]))
+            ops.append(Option(etiqueta, id=d["id"]))
+        return ops or [Option("[dim](sin coincidencias)[/dim]", id="__none__")]
+
+    def _variables(self) -> Vertical:
         return Vertical(
             Static("Paso 1 · Elige la variable a descargar", classes="titulo"),
-            Static("↑↓ navegar · Enter elegir · (las 'especiales' se habilitan pronto)",
-                   classes="pista"),
-            OptionList(*opciones, id="lista-var"),
+            Static("Escribe para filtrar · ↓ entra a la lista · Enter elige", classes="pista"),
+            Input(placeholder="🔍 filtrar variables…", id="buscar-var"),
+            OptionList(*self._opciones_var(), id="lista-var"),
             classes="paso",
         )
 
+    @on(Input.Changed, "#buscar-var")
+    def _filtrar_var(self, ev: Input.Changed) -> None:
+        ol = self.query_one("#lista-var", OptionList)
+        ol.clear_options()
+        ol.add_options(self._opciones_var(ev.value))
+
     @on(OptionList.OptionSelected, "#lista-var")
     def _eligio_var(self, ev: OptionList.OptionSelected) -> None:
+        if ev.option_id == "__none__":
+            return
         dataset = next(d for d in DATASETS_INFO if d["id"] == ev.option_id)
         if dataset.get("tipo") != "estandar":
             self.notify("Las variables 'especiales' se habilitarán en la próxima etapa.",
@@ -360,7 +454,7 @@ class IdeamTUI(App):
     def _anios(self) -> Vertical:
         return Vertical(
             Static("Paso 3 · Rango de años", classes="titulo"),
-            Static("Detectando años disponibles…", id="rango-info", classes="pista"),
+            Shimmer("⏳ Detectando años disponibles…", id="rango-info"),
             Horizontal(
                 Vertical(Label("Año inicio:"), Input(placeholder="…", id="f-ini")),
                 Vertical(Label("Año fin:"), Input(placeholder="…", id="f-fin")),
@@ -397,8 +491,8 @@ class IdeamTUI(App):
         self.call_from_thread(self._fijar_rango, gmin, gmax)
 
     def _fijar_rango(self, gmin: int, gmax: int) -> None:
-        self.query_one("#rango-info", Static).update(
-            f"Histórico disponible: [b]{gmin}–{gmax}[/b] · ajusta o deja así para todo")
+        self.query_one("#rango-info", Shimmer).detener(
+            f"[{GRIS}]Histórico disponible: [b]{gmin}–{gmax}[/b] · ajusta o deja así para todo[/]")
         self.query_one("#f-ini", Input).value = str(gmin)
         self.query_one("#f-fin", Input).value = str(gmax)
 
@@ -420,8 +514,10 @@ class IdeamTUI(App):
 
     # ---------- paso 4: descarga ----------
     def _descarga(self) -> Vertical:
+        emoji = emoji_de(self.sel_dataset["nombre"])
         return Vertical(
-            Static(f"Descargando {self.sel_dataset['nombre']}", classes="titulo"),
+            Static(f"{emoji}  {self.sel_dataset['nombre']}", classes="titulo"),
+            Shimmer(f"⏳ Descargando {self.sel_dataset['nombre']}…", id="shimmer-dl"),
             ProgressBar(total=100, show_eta=True, id="barra"),
             Static("Iniciando…", id="estado"),
             classes="paso",
@@ -458,16 +554,24 @@ class IdeamTUI(App):
 
     def _ok(self, r: dict) -> None:
         self.query_one("#barra", ProgressBar).update(progress=100)
+        self.query_one("#shimmer-dl", Shimmer).detener("")
         if r["rows"] == 0:
             msg = (f"[{AMARILLO}]Sin datos.[/] La consulta fue válida pero el IDEAM no tiene "
                    "registros de esa variable para ese departamento/periodo.")
         else:
-            msg = (f"[{AMARILLO}]✓ Descarga completa[/]\nFilas: {r['rows']:,}  ·  "
-                   f"{r['files_parquet']} parquet · {r['files_csv']} csv  ·  {r['seconds']}s\n"
-                   f"Carpeta: {r['output_dir']}/")
-        self.query_one("#estado", Static).update(msg + "\n\nPulsa N para otra consulta o Q para salir.")
+            msg = (
+                f"[{AMARILLO} bold]✓ ¡DESCARGA COMPLETA![/]\n\n"
+                f"[{GRIS}]Filas únicas:[/] [b]{r['rows']:,}[/b]"
+                + (f"   ([{GRIS}]{r['duplicates']:,} duplicados depurados[/])" if r.get("duplicates") else "")
+                + f"\n[{GRIS}]Archivos:[/] {r['files_parquet']} parquet · {r['files_csv']} csv\n"
+                f"[{GRIS}]Carpeta:[/] {r['output_dir']}/\n"
+                f"[{GRIS}]Tiempo:[/] {r['seconds']}s"
+            )
+        self.query_one("#estado", Static).update(
+            msg + f"\n\n[{GRIS}]Pulsa [b]N[/b] para otra consulta o [b]Q[/b] para salir.[/]")
 
     def _err(self, msg: str) -> None:
+        self.query_one("#shimmer-dl", Shimmer).detener("")
         self.query_one("#estado", Static).update(
             f"[{ROJO}]{msg}[/]\n\nPulsa N para reintentar o Q para salir.")
 
