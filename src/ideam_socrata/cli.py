@@ -85,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("datasets", help="Lista los datasets IDEAM disponibles y sus IDs.")
 
+    subparsers.add_parser("tui", help="Abre la interfaz visual de pantalla completa (Textual).")
+
     download = subparsers.add_parser(
         "download",
         help="Descarga no interactiva (scriptable): dataset + departamentos + rango de fechas.",
@@ -131,6 +133,15 @@ def main(argv: list[str] | None = None) -> int:
         from .batch import list_datasets
 
         list_datasets()
+        return 0
+    if args.command == "tui":
+        try:
+            from .tui import run as run_tui
+        except ModuleNotFoundError as exc:
+            raise SystemExit(
+                "La interfaz visual requiere 'textual'. Instálala con: pip install textual"
+            ) from exc
+        run_tui()
         return 0
     if args.command == "download":
         from .batch import download

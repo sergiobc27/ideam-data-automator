@@ -193,10 +193,14 @@ def download(
     base_dir: str = "data",
     workers: int | None = None,
     engine: str = "rapido",
+    quiet: bool = False,
+    on_progress=None,
 ) -> dict:
     """Descarga un dataset estandar filtrado y lo exporta organizado por carpetas.
 
     engine='rapido' (export cacheado + gzip, 5-10x mas veloz) | 'soda' (paginado clasico).
+    quiet=True suprime toda salida rich (para front-ends como la TUI).
+    on_progress(bloques_hechos, total_bloques, filas) se llama tras cada bloque.
     """
     dataset = DATASETS_ESTANDAR.get(dataset_id)
     if dataset is None:
@@ -219,49 +223,42 @@ def download(
         canonicos, MAPEO_DEPARTAMENTOS
     )
     blocks = month_blocks(start_date, end_date)
-    console.print(
-        f"[texto]Descargando [bold]{nombre}[/bold] ({dataset_id}) | "
-        f"{', '.join(canonicos)} | {start_date} -> {end_date} | "
-        f"{len(blocks)} bloques | motor {engine}[/texto]"
-    )
+    if not quiet:
+        console.print(
+            f"[texto]Descargando [bold]{nombre}[/bold] ({dataset_id}) | "
+            f"{', '.join(canonicos)} | {start_date} -> {end_date} | "
+            f"{len(blocks)} bloques | motor {engine}[/texto]"
+        )
 
     t0 = time.time()
     # concurrencia conservadora con el motor rapido (doc Socrata sugiere 2-4)
     max_workers = workers or (4 if engine == "rapido" else min(MAX_WORKERS, 8))
     frames: list[pd.DataFrame] = []
     registros: list[dict] = []
-    filas_brutas = 0
-    with Progress(
-        TextColumn("  [progress.description]{task.description}"),
-        BarColumn(bar_width=None),
-        TaskProgressColumn(),
-        TimeElapsedColumn(),
-        TextColumn("• [bold secundario]{task.fields[filas]} filas brutas"),
-        console=console,
-    ) as progress:
-        tarea = progress.add_task("Descargando bloques", total=len(blocks), filas="0")
+
+    def _descargar(update):
+        """Ejecuta los bloques en paralelo; update(hechos, filas) por cada uno."""
+        filas = 0
+        hechos = 0
         try:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                if engine == "rapido":
-                    futures = {
-                        pool.submit(_fetch_block_fast, dataset_id, col_fecha, y, m, where_deptos, nombre): (y, m)
-                        for y, m in blocks
-                    }
-                else:
-                    futures = {
-                        pool.submit(_fetch_block, dataset_id, col_fecha, y, m, [where_deptos], nombre): (y, m)
-                        for y, m in blocks
-                    }
+                worker = _fetch_block_fast if engine == "rapido" else _fetch_block
+                futures = [
+                    pool.submit(worker, dataset_id, col_fecha, y, m,
+                                where_deptos if engine == "rapido" else [where_deptos], nombre)
+                    for y, m in blocks
+                ]
                 for future in as_completed(futures):
                     resultado = future.result()
                     if engine == "rapido":
                         if resultado is not None and not resultado.empty:
                             frames.append(resultado)
-                            filas_brutas += len(resultado)
+                            filas += len(resultado)
                     else:
                         registros.extend(resultado)
-                        filas_brutas = len(registros)
-                    progress.update(tarea, advance=1, filas=f"{filas_brutas:,}")
+                        filas = len(registros)
+                    hechos += 1
+                    update(hechos, filas)
         except SocrataError as exc:
             raise SystemExit(
                 f"\nNo se pudo completar la descarga: la API de Socrata no respondió "
@@ -271,6 +268,29 @@ def download(
                 "o un rango de fechas más corto."
             ) from None
 
+    def _update(hechos, filas):
+        if on_progress:
+            on_progress(hechos, len(blocks), filas)
+
+    if quiet:
+        _descargar(_update)
+    else:
+        with Progress(
+            TextColumn("  [progress.description]{task.description}"),
+            BarColumn(bar_width=None),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TextColumn("• [bold secundario]{task.fields[filas]} filas brutas"),
+            console=console,
+        ) as progress:
+            tarea = progress.add_task("Descargando bloques", total=len(blocks), filas="0")
+
+            def _update_rich(hechos, filas):
+                progress.update(tarea, completed=hechos, filas=f"{filas:,}")
+                _update(hechos, filas)
+
+            _descargar(_update_rich)
+
     if engine == "rapido":
         resultados = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         vacio = resultados.empty if isinstance(resultados, pd.DataFrame) else True
@@ -279,23 +299,24 @@ def download(
         vacio = not registros
 
     if vacio:
-        console.print(
-            Panel(
-                f"[texto]La consulta fue válida pero el IDEAM no tiene registros de "
-                f"[bold]{nombre}[/bold] para [bold]{', '.join(canonicos)}[/bold] entre "
-                f"{start_date} y {end_date}.\n\n"
-                "Posibles razones:\n"
-                "  • No existen estaciones de esa variable en ese departamento.\n"
-                "  • El periodo elegido está fuera del histórico disponible.\n\n"
-                "Sugerencia: revisa la cobertura con "
-                f"[s_bold]ideam-socrata verify --department {canonicos[0]} "
-                f"--dataset-id {dataset_id}[/s_bold], o prueba otro departamento/periodo.[/texto]",
-                title="[s_bold] SIN DATOS [/s_bold]",
-                border_style="secundario",
-                expand=False,
-                padding=(1, 2),
+        if not quiet:
+            console.print(
+                Panel(
+                    f"[texto]La consulta fue válida pero el IDEAM no tiene registros de "
+                    f"[bold]{nombre}[/bold] para [bold]{', '.join(canonicos)}[/bold] entre "
+                    f"{start_date} y {end_date}.\n\n"
+                    "Posibles razones:\n"
+                    "  • No existen estaciones de esa variable en ese departamento.\n"
+                    "  • El periodo elegido está fuera del histórico disponible.\n\n"
+                    "Sugerencia: revisa la cobertura con "
+                    f"[s_bold]ideam-socrata verify --department {canonicos[0]} "
+                    f"--dataset-id {dataset_id}[/s_bold], o prueba otro departamento/periodo.[/texto]",
+                    title="[s_bold] SIN DATOS [/s_bold]",
+                    border_style="secundario",
+                    expand=False,
+                    padding=(1, 2),
+                )
             )
-        )
         return {"rows": 0, "files_parquet": 0, "files_csv": 0, "seconds": round(time.time() - t0, 1)}
 
     df = normalize_chunk(resultados, dataset_id, col_fecha, replacements)
@@ -313,19 +334,20 @@ def download(
         "output_dir": base_dir,
         "seconds": round(time.time() - t0, 1),
     }
-    console.print(
-        Panel(
-            f"[texto]Filas únicas: [bold]{summary['rows']:,}[/bold]\n"
-            f"Duplicados eliminados: {duplicados:,}\n"
-            f"Archivos generados: {len(outputs)} parquet · {total_csv} csv\n"
-            f"Carpeta: {base_dir}/\n"
-            f"Tiempo: {summary['seconds']}s · motor {engine}[/texto]",
-            title="[bold exito] DESCARGA COMPLETA [/bold exito]",
-            border_style="exito",
-            expand=False,
-            padding=(1, 2),
+    if not quiet:
+        console.print(
+            Panel(
+                f"[texto]Filas únicas: [bold]{summary['rows']:,}[/bold]\n"
+                f"Duplicados eliminados: {duplicados:,}\n"
+                f"Archivos generados: {len(outputs)} parquet · {total_csv} csv\n"
+                f"Carpeta: {base_dir}/\n"
+                f"Tiempo: {summary['seconds']}s · motor {engine}[/texto]",
+                title="[bold exito] DESCARGA COMPLETA [/bold exito]",
+                border_style="exito",
+                expand=False,
+                padding=(1, 2),
+            )
         )
-    )
     return summary
 
 
