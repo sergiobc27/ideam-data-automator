@@ -14,7 +14,7 @@ authors:
   - family-names: "Beltrán Coley"
     given-names: "Sergio"
     affiliation: "Universidad de la Costa (CUC), Barranquilla, Colombia"
-version: "1.0.2"
+version: "1.0.3"
 date-released: "2026-06-05"
 doi: 10.5281/zenodo.20562858
 license: Apache-2.0

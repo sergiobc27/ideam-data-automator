@@ -1,5 +1,8 @@
-pandas
-sodapy
-rich
-pyarrow
-pydantic
+# Espejo de las dependencias de pyproject.toml (la fuente de verdad es pyproject).
+# Instalación recomendada: pip install ideam-data-automator   (o `pip install .`)
+pandas>=2.0
+sodapy>=2.2
+rich>=13.0
+pyarrow>=14.0
+pydantic>=2.0
+textual>=0.80

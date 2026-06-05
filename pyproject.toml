@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ideam-data-automator"
-version = "1.0.2"
+version = "1.0.3"
 description = "Pipeline para extraer, validar y organizar datos hidrometeorologicos del IDEAM (Colombia) desde Socrata/Datos Abiertos."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,11 +25,11 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Hydrology",
 ]
 dependencies = [
-  "pandas",
-  "sodapy",
-  "rich",
-  "pyarrow",
-  "pydantic",
+  "pandas>=2.0",
+  "sodapy>=2.2",
+  "rich>=13.0",
+  "pyarrow>=14.0",
+  "pydantic>=2.0",
   "textual>=0.80",
 ]
 
@@ -38,7 +38,7 @@ dependencies = [
 # El usuario local de la CLI NO los necesita: `pip install .` basta.
 server = [
   "psycopg[binary]>=3.1",
-  "requests",
+  "requests>=2.31",
 ]
 
 [project.urls]
@@ -53,6 +53,11 @@ ideam-socrata = "ideam_socrata.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["ideam_socrata*"]
+
+[tool.setuptools.package-data]
+# El esquema SQL debe viajar con el paquete: el flujo de servidor (docs/SERVIDOR.md)
+# lo necesita en runtime aunque se instale con pip.
+ideam_socrata = ["db/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -27,6 +27,11 @@ async def lifespan(_app: FastAPI):
         if populated and not populated[0]:
             logger.info("Poblando mv_catalogo por primera vez...")
             conn.execute("REFRESH MATERIALIZED VIEW mv_catalogo")
+    if not settings.api_shared_secret:
+        logger.error(
+            "API_SHARED_SECRET no configurado: la API rechazará TODAS las "
+            "solicitudes (fail-closed). Configura el secreto en /etc/ideam/ideam.env."
+        )
     logger.info("API lista.")
     yield
     pool.close()
@@ -44,9 +49,15 @@ app.add_middleware(
 
 @app.middleware("http")
 async def proxy_secret_guard(request: Request, call_next):
-    """Si hay secreto configurado, solo el Worker (proxy) puede llamar a la API."""
-    if settings.api_shared_secret and request.url.path != "/api/health":
-        if request.headers.get("x-ideam-proxy-secret") != settings.api_shared_secret:
+    """Solo el Worker (proxy) puede llamar a la API.
+
+    Fail-closed: si el secreto NO está configurado se rechaza todo (excepto
+    /api/health). Antes 'fallaba abierto': sin la variable de entorno, la API
+    quedaba sin autenticación.
+    """
+    if request.url.path != "/api/health":
+        secreto = settings.api_shared_secret
+        if not secreto or request.headers.get("x-ideam-proxy-secret") != secreto:
             return JSONResponse({"error": "No autorizado."}, status_code=403)
     return await call_next(request)
 

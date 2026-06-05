@@ -5,15 +5,23 @@
 > completo de los datos en una base de datos propia.
 
 El espejo completo (≈450 millones de observaciones) vive en PostgreSQL 15 +
-TimescaleDB con compresión columnar y agregados continuos para dashboards:
+TimescaleDB con compresión columnar y agregados continuos para dashboards.
+
+El modo servidor se instala **clonando el repositorio** (las carpetas `api/` y
+`deploy/` no viajan en el paquete pip):
 
 ```bash
-pip install "ideam-data-automator[server]"
+git clone https://github.com/sergiobc27/ideam-data-automator.git
+cd ideam-data-automator
+pip install -e ".[server]"
 psql "$DATABASE_URL" -f src/ideam_socrata/db/schema.sql   # esquema idempotente
 python -m ideam_socrata.db.load_estaciones                 # catálogo de estaciones
 python -m ideam_socrata.db.backfill --dataset all --mode year
 python -m ideam_socrata.db.delta                           # incremental diario
 ```
+
+(Desde v1.0.3 `schema.sql` también viaja dentro del paquete pip; su ruta instalada se
+obtiene con `python -c "import ideam_socrata.db, pathlib; print(pathlib.Path(ideam_socrata.db.__file__).parent / 'schema.sql')"`.)
 
 ## Componentes
 

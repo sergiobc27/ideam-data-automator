@@ -14,11 +14,66 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
 > hidrometeorológicas, superación de los límites de la API Socrata y evolución
 > hacia una plataforma web de monitoreo y análisis hídrico.
 
-## [No publicado]
+## [1.0.3] - 2026-06-05
 
-*Ejecuta las Líneas de Investigación Futura del Capítulo 5 de la tesis.*
+*Versión de endurecimiento tras una auditoría integral multi-rol (arquitectura,
+seguridad, datos, QA, release y revisión académica).*
+
+### Corregido
+- **La API ahora "falla cerrado"**: si `API_SHARED_SECRET` no está configurado se
+  rechazan todas las solicitudes (antes quedaba sin autenticación) y se registra
+  un error explícito al arrancar.
+- **Las descargas de datasets especiales ya no exportan resultados parciales**:
+  si un bloque falla tras los reintentos, se cancela la exportación con un
+  mensaje claro en lugar de producir archivos incompletos en silencio.
+- `requirements.txt` no incluía `textual`: quien instalaba por esa vía no podía
+  abrir la interfaz visual (`ideam-socrata tui`).
+- `schema.sql` ahora viaja dentro del paquete (package-data) y la guía de
+  servidor (`docs/SERVIDOR.md`) documenta el flujo correcto con `git clone`.
+
+### Cambiado
+- Pisos de versión mínima en todas las dependencias (`pandas>=2.0`,
+  `pydantic>=2.0`, etc.) en `pyproject.toml` y `requirements.txt`.
+
+## [1.0.2] - 2026-06-05
 
 ### Agregado
+- **Versión citable**: DOI de Zenodo
+  ([10.5281/zenodo.20562858](https://doi.org/10.5281/zenodo.20562858)),
+  `CITATION.cff` con referencia a la tesis, `.zenodo.json` y badges en el README.
+
+### Cambiado
+- README de PyPI enfocado 100 % en la herramienta local (el modo servidor se
+  movió a `docs/SERVIDOR.md`).
+- El lanzador de Windows (`.bat`) abre la ventana maximizada.
+
+## [1.0.1] - 2026-06-05
+
+### Cambiado
+- Nombre del paquete en PyPI: `ideam-data-automator` (coincide con el repositorio).
+
+## [1.0.0] - 2026-06-05
+
+*Primera versión publicada en PyPI. Ejecuta las Líneas de Investigación Futura
+del Capítulo 5 de la tesis.*
+
+### Agregado
+- **Interfaz visual de pantalla completa** (`ideam-socrata tui`, Textual):
+  navegación por flechas, selección con checkmarks, buscador de variables,
+  panel de resumen en vivo, animaciones, filtros avanzados del catálogo y
+  progreso con filas/s y tiempo restante. Conserva el flujo completo del
+  asistente clásico (aviso legal, 21 variables, departamentos, años).
+- **Datasets especiales habilitados** (calidad de aire/agua, normales
+  climatológicas, zonificación, GEI, escorrentía, catálogo de estaciones) con
+  flujo adaptado a la estructura de cada uno.
+- **Reporte de cobertura** `RESUMEN_*.txt` en cada descarga: rango real de los
+  datos, filas por estación con primera/última observación y % de completitud
+  mensual.
+- **Cobertura previa por filtro** en el paso de años: estaciones del catálogo y
+  rango real de fechas antes de descargar.
+- **Fechas reales para Excel**: el CSV exporta `YYYY-MM-DD HH:MM:SS` (filtrable
+  como fecha) y el Parquet guarda timestamps nativos, preservando la paridad
+  exacta de los `floating_id` históricos.
 - **Espejo de datos propio** (propuesta de tesis: *"almacenamiento en bases de
   datos locales o en la nube y ejecución programada de actualizaciones"*):
   subpaquete `ideam_socrata.db` que replica los 13 datasets hidrometeorológicos

@@ -155,7 +155,15 @@ def descargar_especial_directo(dataset_id, nombre_export, var_nombre, filtros_li
             offset = 0
             while True:
                 data = intentar(lambda: CLIENT.get(dataset_id, where=where_str, limit=LIMIT, offset=offset, order=":id"), var_nombre)
-                if data is None: break
+                if data is None:
+                    # Fallo definitivo de un bloque: cancelar TODO en vez de
+                    # exportar resultados parciales como si fueran completos.
+                    console.print(
+                        f"[bold #A3161A][!] Falló la descarga de {var_nombre} tras varios "
+                        "reintentos. No se exporta nada para evitar datos incompletos; "
+                        "intente de nuevo más tarde.[/bold #A3161A]"
+                    )
+                    return
                 if data: resultados.extend(data)
                 if len(data) < LIMIT: break
                 offset += LIMIT
