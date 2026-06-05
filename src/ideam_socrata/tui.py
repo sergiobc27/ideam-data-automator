@@ -31,6 +31,7 @@ from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
 from .config import DATASETS_INFO, MAPEO_DEPARTAMENTOS
+from .query_validation import build_department_filter
 from .ui import build_logo_text
 
 DATASETS_ESTANDAR = [d for d in DATASETS_INFO if d.get("tipo") == "estandar"]
@@ -93,12 +94,11 @@ class IdeamTUI(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.paso = 0  # 0=aviso legal, 1=variable, 2=deptos, 3=opciones, 4=descarga
+        self.paso = 0  # 0=aviso legal, 1=variable, 2=deptos, 3=años, 4=descarga
         self.sel_dataset: dict | None = None
         self.sel_departamentos: list[str] = []
-        self._inicio = self._fin = ""
+        self._anio_ini = self._anio_fin = ""
         self._con_csv = False
-        self._engine = "rapido"
 
     # ---------- composición base ----------
     def compose(self) -> ComposeResult:
@@ -114,13 +114,13 @@ class IdeamTUI(App):
     def _refrescar_resumen(self) -> None:
         var = self.sel_dataset["nombre"] if self.sel_dataset else "—"
         dep = ", ".join(self.sel_departamentos) if self.sel_departamentos else "—"
-        fechas = f"{self._inicio} → {self._fin}" if self._inicio else "—"
+        anios = f"{self._anio_ini}–{self._anio_fin}" if self._anio_ini else "—"
         def marca(activo, hecho):
             return "[green]✔[/green]" if hecho else ("[yellow]➤[/yellow]" if activo else "·")
         linea = (
             f"{marca(self.paso==1, self.sel_dataset is not None)} Variable: [b]{var}[/b]   "
             f"{marca(self.paso==2, bool(self.sel_departamentos))} Deptos: [b]{dep}[/b]   "
-            f"{marca(self.paso==3, bool(self._inicio))} Fechas: [b]{fechas}[/b]"
+            f"{marca(self.paso==3, bool(self._anio_ini))} Años: [b]{anios}[/b]"
         )
         self.query_one("#resumen", Static).update(linea)
 
@@ -130,11 +130,13 @@ class IdeamTUI(App):
         cuerpo = self.query_one("#cuerpo", VerticalScroll)
         cuerpo.remove_children()
         builder = {0: self._aviso, 1: self._variables, 2: self._departamentos,
-                   3: self._opciones, 4: self._descarga}[self.paso]
+                   3: self._anios, 4: self._descarga}[self.paso]
         cuerpo.mount(builder())
-        foco = {1: "#lista-var", 2: "#lista-deptos", 3: "#f-inicio"}.get(self.paso)
+        foco = {1: "#lista-var", 2: "#lista-deptos", 3: "#f-ini"}.get(self.paso)
         if foco:
             self.call_after_refresh(lambda s=foco: self.query_one(s).focus())
+        if self.paso == 3:
+            self._detectar_anios()
         if self.paso == 4:
             self._descargar_worker()
 
@@ -228,20 +230,18 @@ class IdeamTUI(App):
     def _btn_atras(self) -> None:
         self.action_atras()
 
-    # ---------- paso 3: fechas y opciones ----------
-    def _opciones(self) -> Vertical:
+    # ---------- paso 3: rango de años ----------
+    def _anios(self) -> Vertical:
         return Vertical(
-            Static("Paso 3 · Rango de fechas y formato", classes="titulo"),
-            Static("Tab para cambiar de campo · formato YYYY-MM-DD", classes="pista"),
+            Static("Paso 3 · Rango de años", classes="titulo"),
+            Static("Detectando años disponibles…", id="rango-info", classes="pista"),
             Horizontal(
-                Vertical(Label("Desde:"), Input(placeholder="2020-01-01", id="f-inicio")),
-                Vertical(Label("Hasta (exclusivo):"), Input(placeholder="2024-12-31", id="f-fin")),
+                Vertical(Label("Año inicio:"), Input(placeholder="…", id="f-ini")),
+                Vertical(Label("Año fin:"), Input(placeholder="…", id="f-fin")),
                 id="fila-fechas",
             ),
-            Label("Opciones:"),
             SelectionList(
                 Selection("También exportar CSV (además de Parquet)", "csv", False),
-                Selection("Motor rápido (gzip, recomendado)", "rapido", True),
                 id="lista-opciones",
             ),
             Horizontal(
@@ -252,21 +252,43 @@ class IdeamTUI(App):
             classes="paso",
         )
 
+    @work(thread=True)
+    def _detectar_anios(self) -> None:
+        """Consulta min/max año del dataset y prerellena los campos."""
+        from .config import CLIENT
+        from .core import intentar
+        import re
+
+        col = self.sel_dataset["fecha_col"]
+        ds = self.sel_dataset["id"]
+        try:
+            rmin = intentar(lambda: CLIENT.get(ds, select=col, order=f"{col} ASC", limit=1), "min")
+            rmax = intentar(lambda: CLIENT.get(ds, select=col, order=f"{col} DESC", limit=1), "max")
+            gmin = int(re.search(r"\d{4}", str(rmin[0].get(col))).group())
+            gmax = int(re.search(r"\d{4}", str(rmax[0].get(col))).group())
+        except Exception:  # noqa: BLE001
+            gmin, gmax = 2001, 2026
+        self.call_from_thread(self._fijar_rango, gmin, gmax)
+
+    def _fijar_rango(self, gmin: int, gmax: int) -> None:
+        self.query_one("#rango-info", Static).update(
+            f"Histórico disponible: [b]{gmin}–{gmax}[/b] · ajusta o deja así para todo")
+        self.query_one("#f-ini", Input).value = str(gmin)
+        self.query_one("#f-fin", Input).value = str(gmax)
+
     @on(Button.Pressed, "#descargar")
     def _iniciar(self) -> None:
-        from .batch import _validar_fechas
-
-        inicio = self.query_one("#f-inicio", Input).value.strip()
-        fin = self.query_one("#f-fin", Input).value.strip()
         try:
-            _validar_fechas(inicio, fin)
-        except SystemExit as exc:
-            self.notify(str(exc), severity="error", timeout=8)
+            ini = int(self.query_one("#f-ini", Input).value.strip())
+            fin = int(self.query_one("#f-fin", Input).value.strip())
+        except ValueError:
+            self.notify("Escribe años válidos (ej. 2015).", severity="warning")
             return
-        opciones = self.query_one("#lista-opciones", SelectionList).selected
-        self._inicio, self._fin = inicio, fin
-        self._con_csv = "csv" in opciones
-        self._engine = "rapido" if "rapido" in opciones else "soda"
+        if ini > fin:
+            self.notify("El año inicio debe ser menor o igual al año fin.", severity="warning")
+            return
+        self._anio_ini, self._anio_fin = ini, fin
+        self._con_csv = "csv" in self.query_one("#lista-opciones", SelectionList).selected
         self.paso = 4
         self._render()
 
@@ -281,23 +303,24 @@ class IdeamTUI(App):
 
     @work(thread=True, exclusive=True)
     def _descargar_worker(self) -> None:
-        from .batch import download
+        from .engine import descargar
 
         def on_progress(hechos, total, filas):
             pct = int(hechos / total * 100) if total else 100
             self.call_from_thread(self._set_prog, pct, filas)
 
         try:
-            r = download(
-                dataset_id=self.sel_dataset["id"], departments=self.sel_departamentos,
-                start_date=self._inicio, end_date=self._fin, include_csv=self._con_csv,
-                engine=self._engine, quiet=True, on_progress=on_progress,
+            col = self.sel_dataset["fecha_col"]
+            filtro_dep, reemplazos, _ = build_department_filter(
+                self.sel_departamentos, MAPEO_DEPARTAMENTOS)
+            tareas = [(a, None, [filtro_dep]) for a in range(self._anio_ini, self._anio_fin + 1)]
+            r = descargar(
+                self.sel_dataset["id"], col, tareas, reemplazos, self.sel_dataset["nombre"],
+                include_csv=self._con_csv, on_progress=on_progress,
             )
             self.call_from_thread(self._ok, r)
-        except SystemExit as exc:
-            self.call_from_thread(self._err, str(exc))
         except Exception as exc:  # noqa: BLE001
-            self.call_from_thread(self._err, f"Error inesperado: {exc}")
+            self.call_from_thread(self._err, f"Error: {exc}")
 
     def _set_prog(self, pct: int, filas: int) -> None:
         self.query_one("#barra", ProgressBar).update(progress=pct)
