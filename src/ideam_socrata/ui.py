@@ -4,9 +4,9 @@ from rich.panel import Panel
 from rich.align import Align
 from .config import console
 
-def mostrar_logo():
-    """Renderiza el logo oficial de la universidad actualizado."""
-    img_text_data = [
+def build_logo_text():
+    """Construye el logo CUC como rich.Text reutilizable (consola y TUI)."""
+    filas = [
         [("█", "#b60000"), ("█", "#b80000"), ("██", "#b60000"), ("████████████████████████", "#b80000"), ("███", "#b60000"), ("    ", "transparent"), ("█████████", "#b80000"), ("█", "#b60000"), ("█", "#b80000"), ("█", "#ba0000"), ("      ", "transparent"), ("█", "#b40000"), ("█", "#b80000"), ("█", "#b60000"), ("████████", "#b80000"), ("█", "#ba0000"), ("    ", "transparent"), ("█", "#b20000"), ("█", "#b40000"), ("█", "#b60000"), ("████████████████████████", "#b80000"), ("███", "#b60000"), ("█", "#b20000")],
         [("███████████████████████████████", "#b80000"), ("█", "#b40000"), ("  ", "transparent"), ("█", "#b60000"), ("███████████", "#b80000"), ("█", "#b60000"), ("█", "#b80000"), ("    ", "transparent"), ("█", "#b80000"), ("█", "#b60000"), ("██████████", "#b80000"), ("█", "#ba0000"), ("█", "#b60000"), ("  ", "transparent"), ("█", "#b40000"), ("███████████████████████████████", "#b80000")],
         [("█████████████████████████████", "#b80000"), ("█", "#b60000"), ("█", "#b80000"), ("█", "#ba0000"), (" ", "transparent"), ("█", "#b80000"), ("█", "#b40000"), ("███████████", "#b80000"), ("█", "#b60000"), ("█", "#b80000"), ("    ", "transparent"), ("█", "#b80000"), ("█", "#b60000"), ("███████████", "#b80000"), ("█", "#ba0000"), ("█", "#bd0000"), (" ", "transparent"), ("█", "#ba0000"), ("█", "#b80000"), ("█", "#b60000"), ("█████████████████████████████", "#b80000")],
@@ -24,14 +24,18 @@ def mostrar_logo():
         [("███████████████████████████████", "#b80000"), ("█", "#b40000"), ("  ", "transparent"), ("█", "#b60000"), ("█████████████████████████████", "#b80000"), ("█", "#ba0000"), ("█", "#b80000"), ("  ", "transparent"), ("█", "#b40000"), ("███████████████████████████████", "#b80000")],
         [("█", "#b40000"), ("█████████████████████████████", "#b80000"), ("█", "#b20000"), ("    ", "transparent"), ("██", "#b60000"), ("█", "#b80000"), ("█", "#ba0000"), ("██████████████████████", "#b80000"), ("█", "#ba0000"), ("███", "#b80000"), ("    ", "transparent"), ("█", "#b60000"), ("█", "#b80000"), ("██", "#ba0000"), ("█████████████████████████", "#b80000"), ("█", "#ba0000"), ("█", "#b80000")],
     ]
-    
     img_text = Text(no_wrap=True, overflow="crop")
-    for row_data in img_text_data:
+    for row_data in filas:
         for c, clr in row_data:
-            img_text.append(c, style=clr)
+            # 'transparent' no es color válido en Textual; los espacios van sin estilo.
+            img_text.append(c, style=None if clr == "transparent" else clr)
         img_text.append("\n")
-    
-    console.print(Align.center(img_text))
+    return img_text
+
+
+def mostrar_logo():
+    """Renderiza el logo CUC centrado en consola."""
+    console.print(Align.center(build_logo_text()))
 
 def espera_estetica(mensaje: str, spinner_type: str = "dots", tiempo: float = 0.4):
     """Muestra una animación corta para mejorar la fluidez visual."""

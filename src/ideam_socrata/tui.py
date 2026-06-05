@@ -1,9 +1,12 @@
 """Interfaz de terminal (TUI) estilo app para IDEAM Data Automator.
 
-Construida con Textual (los autores de rich). Ofrece la experiencia tipo
-Claude Code: cajas seleccionables, navegacion con flechas, marcado con
-checkmarks y actualizacion en vivo, conservando la paleta de la Universidad
-de la Costa. Usa el motor `batch.download` por debajo (modo quiet + callback).
+Adaptación del asistente interactivo clásico (ideam_socrata.main) al estilo
+Textual (cajas seleccionables, navegación por flechas, checkmarks, panel de
+resumen en vivo), conservando logo CUC, aviso legal, las 21 variables y el
+flujo de pasos. Se construye por etapas:
+  Etapa 1 (esta): aviso legal + variables + departamentos + años + panel-resumen.
+  Etapa 2: filtros avanzados (catálogo: zona, categoría, estación, ...).
+  Etapa 3: motor de descarga (core.py en modo silencioso).
 
 Lanzar con:  ideam-socrata tui
 """
@@ -28,6 +31,7 @@ from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
 from .config import DATASETS_INFO, MAPEO_DEPARTAMENTOS
+from .ui import build_logo_text
 
 DATASETS_ESTANDAR = [d for d in DATASETS_INFO if d.get("tipo") == "estandar"]
 DEPARTAMENTOS = sorted(MAPEO_DEPARTAMENTOS)
@@ -37,13 +41,23 @@ ROJO = "#A3161A"
 AMARILLO = "#FCD116"
 GRIS = "#A5A5A5"
 
-BANNER = r"""
- ___ ____  _____ _    __  __
-|_ _|  _ \| ____| |  |  \/  |   Data Automator
- | || | | |  _| | |  | |\/| |   Datos hidrometeorologicos del IDEAM
- | || |_| | |___| |__| |  | |   Universidad de la Costa
-|___|____/|_____|_____|_|  |_|
-"""
+PRESENTACION = (
+    "[bold]AUTOMATIZACIÓN INTELIGENTE PARA LA GESTIÓN VISUAL DE DATOS "
+    "HÍDRICOS DEL IDEAM[/bold]\n"
+    "Proyecto de Tesis de Pregrado – Ingeniería Civil\n\n"
+    "Autor: Sergio Beltrán Coley\n"
+    "Tutora: Ing. Carol Prada Sánchez   ·   Cotutor: Ing. Sebastián Quintero Merchán\n"
+    "Universidad de la Costa – Barranquilla, Colombia"
+)
+
+AVISO_LEGAL = (
+    "[bold]ACUERDO DE USO ACADÉMICO E INVESTIGATIVO[/bold]\n\n"
+    "Al continuar, usted manifiesta estar de acuerdo con:\n"
+    "  • El uso de los datos es exclusivamente para fines académicos e investigativos.\n"
+    "  • La información proviene del IDEAM bajo la Política de Datos Abiertos de Colombia.\n"
+    "  • El autor no se hace responsable del tratamiento posterior de la información.\n"
+    "  • Se prohíbe el uso para fines comerciales no autorizados."
+)
 
 
 class IdeamTUI(App):
@@ -52,31 +66,34 @@ class IdeamTUI(App):
 
     CSS = f"""
     Screen {{ align: center top; }}
-    #banner {{ color: {ROJO}; text-style: bold; padding: 0 1; }}
+    #logo {{ color: {ROJO}; padding: 0; height: auto; }}
+    #cuerpo {{ height: 1fr; }}
     .paso {{ border: round {AMARILLO}; padding: 1 2; margin: 1 2; height: auto; }}
+    .legal {{ border: round {ROJO}; padding: 1 2; margin: 1 2; height: auto; }}
     .titulo {{ color: {AMARILLO}; text-style: bold; margin-bottom: 1; }}
     .pista {{ color: {GRIS}; }}
-    OptionList {{ height: auto; max-height: 16; }}
+    .presentacion {{ color: {GRIS}; padding: 0 2; }}
+    OptionList {{ height: auto; max-height: 18; }}
     SelectionList {{ height: auto; max-height: 18; }}
     Input {{ margin: 1 0; }}
     #fila-fechas {{ height: auto; }}
     #fila-fechas Vertical {{ width: 1fr; padding-right: 2; height: auto; }}
     #botones {{ height: auto; align: center middle; padding-top: 1; }}
     Button {{ margin: 0 1; }}
-    #resumen {{ color: {GRIS}; padding: 0 2; }}
-    ProgressBar {{ margin: 1 0; }}
+    #resumen {{ border: round {GRIS}; padding: 0 1; margin: 0 2; color: {GRIS}; height: auto; }}
     #estado {{ padding: 1 0; }}
+    ProgressBar {{ margin: 1 0; }}
     """
 
     BINDINGS = [
         ("q", "quit", "Salir"),
         ("escape", "atras", "Atrás"),
-        ("n", "reiniciar", "Nueva descarga"),
+        ("n", "reiniciar", "Nueva consulta"),
     ]
 
     def __init__(self) -> None:
         super().__init__()
-        self.paso = 0
+        self.paso = 0  # 0=aviso legal, 1=variable, 2=deptos, 3=opciones, 4=descarga
         self.sel_dataset: dict | None = None
         self.sel_departamentos: list[str] = []
         self._inicio = self._fin = ""
@@ -86,68 +103,109 @@ class IdeamTUI(App):
     # ---------- composición base ----------
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static(BANNER, id="banner")
+        yield Static(id="resumen")
         yield VerticalScroll(id="cuerpo")
         yield Footer()
 
     def on_mount(self) -> None:
-        self._render_paso()
+        self._render()
+
+    # ---------- panel-resumen (siempre visible) ----------
+    def _refrescar_resumen(self) -> None:
+        var = self.sel_dataset["nombre"] if self.sel_dataset else "—"
+        dep = ", ".join(self.sel_departamentos) if self.sel_departamentos else "—"
+        fechas = f"{self._inicio} → {self._fin}" if self._inicio else "—"
+        def marca(activo, hecho):
+            return "[green]✔[/green]" if hecho else ("[yellow]➤[/yellow]" if activo else "·")
+        linea = (
+            f"{marca(self.paso==1, self.sel_dataset is not None)} Variable: [b]{var}[/b]   "
+            f"{marca(self.paso==2, bool(self.sel_departamentos))} Deptos: [b]{dep}[/b]   "
+            f"{marca(self.paso==3, bool(self._inicio))} Fechas: [b]{fechas}[/b]"
+        )
+        self.query_one("#resumen", Static).update(linea)
 
     # ---------- navegación ----------
-    def _render_paso(self) -> None:
+    def _render(self) -> None:
+        self._refrescar_resumen()
         cuerpo = self.query_one("#cuerpo", VerticalScroll)
         cuerpo.remove_children()
-        builders = {
-            0: self._paso_dataset,
-            1: self._paso_departamentos,
-            2: self._paso_opciones,
-            3: self._paso_descarga,
-        }
-        cuerpo.mount(builders[self.paso]())
-        # foco automatico al control principal de cada paso (mejor navegacion)
-        foco = {0: "#lista-dataset", 1: "#lista-deptos", 2: "#f-inicio"}.get(self.paso)
+        builder = {0: self._aviso, 1: self._variables, 2: self._departamentos,
+                   3: self._opciones, 4: self._descarga}[self.paso]
+        cuerpo.mount(builder())
+        foco = {1: "#lista-var", 2: "#lista-deptos", 3: "#f-inicio"}.get(self.paso)
         if foco:
-            self.call_after_refresh(lambda sel=foco: self.query_one(sel).focus())
-        if self.paso == 3:
+            self.call_after_refresh(lambda s=foco: self.query_one(s).focus())
+        if self.paso == 4:
             self._descargar_worker()
 
     def action_atras(self) -> None:
-        if 0 < self.paso < 3:
+        if 0 < self.paso < 4:
             self.paso -= 1
-            self._render_paso()
+            self._render()
 
     def action_reiniciar(self) -> None:
-        if self.paso == 3:
-            self.paso = 0
-            self.sel_dataset = None
-            self.sel_departamentos = []
-            self._render_paso()
+        if self.paso == 4:
+            self.paso, self.sel_dataset, self.sel_departamentos = 1, None, []
+            self._inicio = self._fin = ""
+            self._render()
 
-    # ---------- paso 1: dataset ----------
-    def _paso_dataset(self) -> Vertical:
-        opciones = [
-            Option(f"{d['nombre']}  ·  {d['id']}", id=d["id"]) for d in DATASETS_ESTANDAR
-        ]
+    # ---------- paso 0: aviso legal + presentación ----------
+    def _aviso(self) -> Vertical:
         return Vertical(
-            Static("Paso 1 · Elige la variable a descargar", classes="titulo"),
-            Static("↑↓ para navegar · Enter para elegir", classes="pista"),
-            OptionList(*opciones, id="lista-dataset"),
+            Static(build_logo_text(), id="logo"),
+            Static(PRESENTACION, classes="presentacion"),
+            Static(AVISO_LEGAL, classes="legal"),
+            Horizontal(
+                Button("No acepto (salir)", id="rechazar"),
+                Button("Acepto los términos →", id="aceptar", variant="primary"),
+                id="botones",
+            ),
             classes="paso",
         )
 
-    @on(OptionList.OptionSelected, "#lista-dataset")
-    def _eligio_dataset(self, ev: OptionList.OptionSelected) -> None:
-        self.sel_dataset = next(d for d in DATASETS_ESTANDAR if d["id"] == ev.option_id)
+    @on(Button.Pressed, "#aceptar")
+    def _aceptar(self) -> None:
         self.paso = 1
-        self._render_paso()
+        self._render()
+
+    @on(Button.Pressed, "#rechazar")
+    def _rechazar(self) -> None:
+        self.exit(message="Acceso denegado: no se aceptaron los términos.")
+
+    # ---------- paso 1: variable (las 21) ----------
+    def _variables(self) -> Vertical:
+        opciones = []
+        for d in DATASETS_INFO:
+            etiqueta = d["nombre"]
+            if d.get("tipo") == "especial":
+                etiqueta += "  [dim](especial)[/dim]"
+            opciones.append(Option(etiqueta, id=d["id"]))
+        return Vertical(
+            Static("Paso 1 · Elige la variable a descargar", classes="titulo"),
+            Static("↑↓ navegar · Enter elegir · (las 'especiales' se habilitan pronto)",
+                   classes="pista"),
+            OptionList(*opciones, id="lista-var"),
+            classes="paso",
+        )
+
+    @on(OptionList.OptionSelected, "#lista-var")
+    def _eligio_var(self, ev: OptionList.OptionSelected) -> None:
+        dataset = next(d for d in DATASETS_INFO if d["id"] == ev.option_id)
+        if dataset.get("tipo") != "estandar":
+            self.notify("Las variables 'especiales' se habilitarán en la próxima etapa.",
+                        severity="warning", timeout=6)
+            return
+        self.sel_dataset = dataset
+        self.paso = 2
+        self._render()
 
     # ---------- paso 2: departamentos ----------
-    def _paso_departamentos(self) -> Vertical:
-        selecciones = [Selection(dep.title(), dep) for dep in DEPARTAMENTOS]
+    def _departamentos(self) -> Vertical:
+        sels = [Selection(dep.title(), dep) for dep in DEPARTAMENTOS]
         return Vertical(
             Static(f"Paso 2 · Departamentos · {self.sel_dataset['nombre']}", classes="titulo"),
-            Static("↑↓ navegar · Espacio para marcar ✓ · puedes elegir varios", classes="pista"),
-            SelectionList(*selecciones, id="lista-deptos"),
+            Static("↑↓ navegar · Espacio marca ✓ · puedes elegir varios", classes="pista"),
+            SelectionList(*sels, id="lista-deptos"),
             Horizontal(
                 Button("← Atrás", id="atras"),
                 Button("Continuar →", id="cont-deptos", variant="primary"),
@@ -157,21 +215,21 @@ class IdeamTUI(App):
         )
 
     @on(Button.Pressed, "#cont-deptos")
-    def _continuar_deptos(self) -> None:
-        seleccion = self.query_one("#lista-deptos", SelectionList).selected
-        if not seleccion:
+    def _cont_deptos(self) -> None:
+        sel = self.query_one("#lista-deptos", SelectionList).selected
+        if not sel:
             self.notify("Marca al menos un departamento con Espacio.", severity="warning")
             return
-        self.sel_departamentos = list(seleccion)
-        self.paso = 2
-        self._render_paso()
+        self.sel_departamentos = list(sel)
+        self.paso = 3
+        self._render()
 
     @on(Button.Pressed, "#atras")
-    def _boton_atras(self) -> None:
+    def _btn_atras(self) -> None:
         self.action_atras()
 
     # ---------- paso 3: fechas y opciones ----------
-    def _paso_opciones(self) -> Vertical:
+    def _opciones(self) -> Vertical:
         return Vertical(
             Static("Paso 3 · Rango de fechas y formato", classes="titulo"),
             Static("Tab para cambiar de campo · formato YYYY-MM-DD", classes="pista"),
@@ -195,7 +253,7 @@ class IdeamTUI(App):
         )
 
     @on(Button.Pressed, "#descargar")
-    def _iniciar_descarga(self) -> None:
+    def _iniciar(self) -> None:
         from .batch import _validar_fechas
 
         inicio = self.query_one("#f-inicio", Input).value.strip()
@@ -209,18 +267,13 @@ class IdeamTUI(App):
         self._inicio, self._fin = inicio, fin
         self._con_csv = "csv" in opciones
         self._engine = "rapido" if "rapido" in opciones else "soda"
-        self.paso = 3
-        self._render_paso()
+        self.paso = 4
+        self._render()
 
-    # ---------- paso 4: descarga en vivo ----------
-    def _paso_descarga(self) -> Vertical:
+    # ---------- paso 4: descarga ----------
+    def _descarga(self) -> Vertical:
         return Vertical(
             Static(f"Descargando {self.sel_dataset['nombre']}", classes="titulo"),
-            Static(
-                f"{', '.join(self.sel_departamentos)} · {self._inicio} → {self._fin} "
-                f"· motor {self._engine}",
-                id="resumen",
-            ),
             ProgressBar(total=100, show_eta=True, id="barra"),
             Static("Iniciando…", id="estado"),
             classes="paso",
@@ -232,51 +285,38 @@ class IdeamTUI(App):
 
         def on_progress(hechos, total, filas):
             pct = int(hechos / total * 100) if total else 100
-            self.call_from_thread(self._set_progreso, pct, filas)
+            self.call_from_thread(self._set_prog, pct, filas)
 
         try:
-            resumen = download(
-                dataset_id=self.sel_dataset["id"],
-                departments=self.sel_departamentos,
-                start_date=self._inicio,
-                end_date=self._fin,
-                include_csv=self._con_csv,
-                engine=self._engine,
-                quiet=True,
-                on_progress=on_progress,
+            r = download(
+                dataset_id=self.sel_dataset["id"], departments=self.sel_departamentos,
+                start_date=self._inicio, end_date=self._fin, include_csv=self._con_csv,
+                engine=self._engine, quiet=True, on_progress=on_progress,
             )
-            self.call_from_thread(self._descarga_ok, resumen)
+            self.call_from_thread(self._ok, r)
         except SystemExit as exc:
-            self.call_from_thread(self._descarga_error, str(exc))
+            self.call_from_thread(self._err, str(exc))
         except Exception as exc:  # noqa: BLE001
-            self.call_from_thread(self._descarga_error, f"Error inesperado: {exc}")
+            self.call_from_thread(self._err, f"Error inesperado: {exc}")
 
-    def _set_progreso(self, pct: int, filas: int) -> None:
+    def _set_prog(self, pct: int, filas: int) -> None:
         self.query_one("#barra", ProgressBar).update(progress=pct)
         self.query_one("#estado", Static).update(f"[{AMARILLO}]{filas:,} filas descargadas[/]")
 
-    def _descarga_ok(self, r: dict) -> None:
+    def _ok(self, r: dict) -> None:
         self.query_one("#barra", ProgressBar).update(progress=100)
         if r["rows"] == 0:
-            msg = (
-                f"[{AMARILLO}]Sin datos.[/] La consulta fue válida pero el IDEAM no tiene "
-                "registros de esa variable para ese departamento/periodo "
-                "(p. ej. municipios sin estación).\n\nPulsa N para otra descarga o Q para salir."
-            )
+            msg = (f"[{AMARILLO}]Sin datos.[/] La consulta fue válida pero el IDEAM no tiene "
+                   "registros de esa variable para ese departamento/periodo.")
         else:
-            msg = (
-                f"[{AMARILLO}]✓ Descarga completa[/]\n"
-                f"Filas únicas: {r['rows']:,}\n"
-                f"Archivos: {r['files_parquet']} parquet · {r['files_csv']} csv\n"
-                f"Carpeta: {r['output_dir']}/  ·  {r['seconds']}s\n\n"
-                "Pulsa N para otra descarga o Q para salir."
-            )
-        self.query_one("#estado", Static).update(msg)
+            msg = (f"[{AMARILLO}]✓ Descarga completa[/]\nFilas: {r['rows']:,}  ·  "
+                   f"{r['files_parquet']} parquet · {r['files_csv']} csv  ·  {r['seconds']}s\n"
+                   f"Carpeta: {r['output_dir']}/")
+        self.query_one("#estado", Static).update(msg + "\n\nPulsa N para otra consulta o Q para salir.")
 
-    def _descarga_error(self, msg: str) -> None:
+    def _err(self, msg: str) -> None:
         self.query_one("#estado", Static).update(
-            f"[{ROJO}]{msg}[/]\n\nPulsa N para reintentar o Q para salir."
-        )
+            f"[{ROJO}]{msg}[/]\n\nPulsa N para reintentar o Q para salir.")
 
 
 def run() -> None:
