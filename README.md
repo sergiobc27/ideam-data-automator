@@ -33,8 +33,10 @@ ideam-socrata tui
 Asistente de pantalla completa con navegación por flechas, selección con
 checkmarks y panel de resumen en vivo:
 
-1. **Variable** — las 21 fuentes del IDEAM (precipitación, niveles de río y mar,
+1. **Variable** — las 21 variables del IDEAM (precipitación, niveles de río y mar,
    temperaturas, viento, humedad, presión, calidad de aire/agua, y más), con buscador.
+   Son **13 datasets estándar** (las series hidrometeorológicas que suman
+   ≈745 millones de observaciones) más **8 variables especiales**: 13 + 8 = 21.
 2. **Departamentos** — selección múltiple + filtros avanzados por zona
    hidrográfica, categoría, tecnología, estado, corriente, entidad, municipio
    o códigos de estación manuales.
@@ -85,6 +87,11 @@ SOCRATA_MAX_WORKERS=10
 SOCRATA_TIMEOUT=300
 ```
 
+Para la herramienta local basta con un solo `SOCRATA_APP_TOKEN`. El modo
+servidor (espejo completo) usa en cambio `SOCRATA_APP_TOKENS` —en plural, varios
+tokens separados por coma que se rotan en round-robin— para sostener las
+descargas masivas; ver [docs/SERVIDOR.md](docs/SERVIDOR.md).
+
 ## Estructura
 
 ```text
@@ -113,6 +120,34 @@ python -m pytest tests/
 
 Si usas esta herramienta en tu investigación, cítala con los metadatos de
 [`CITATION.cff`](CITATION.cff) (GitHub muestra el botón *"Cite this repository"*).
+
+## Limitaciones y preguntas frecuentes
+
+**¿Por qué no hay datos antes de ~2016 en mi municipio?**
+El portal `datos.gov.co` publica la telemetría de las **estaciones automáticas**
+del IDEAM, que en su mayoría empezaron a reportar alrededor de 2016. Las series
+**convencionales históricas** (medidas a mano desde 1929 hasta ~2015) no están
+en datos abiertos: viven solo en el portal **DHIME** del IDEAM. Por eso, para
+muchas estaciones el inicio del registro disponible aquí es relativamente
+reciente. Revisa siempre el archivo **`RESUMEN_*.txt`** que acompaña cada
+descarga: ahí ves la cobertura real estación por estación (primera y última
+observación y % de completitud), que es la única fuente confiable de "hasta
+dónde llega" tu serie.
+
+**¿Por qué mi descarga tiene menos filas que las que muestra el portal?**
+La herramienta **deduplica** los datos por la combinación
+**estación + sensor + fecha**: si el portal entrega la misma medición repetida
+(algo común cuando el IDEAM republica o corrige valores), aquí se conserva una
+sola. El conteo del portal incluye esos duplicados; tu archivo no. Menos filas
+no significa datos perdidos, sino datos limpios.
+
+**¿Hay límites de velocidad al descargar?**
+Sí. Socrata (la plataforma de `datos.gov.co`) limita cuántas peticiones puede
+hacer un cliente por hora. Sin token, ese límite es compartido y bajo, así que
+descargas grandes pueden ralentizarse o cortarse. Un **App Token gratuito**
+(ver *Configuración*) sube ese límite y hace la descarga más estable. Aun con
+token, las descargas de varios años pueden tardar; la herramienta pagina,
+reintenta y reanuda automáticamente.
 
 ## Política de datos
 
