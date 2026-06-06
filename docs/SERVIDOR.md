@@ -4,8 +4,9 @@
 > ideam-data-automator`). Es la infraestructura avanzada que hospeda un espejo
 > completo de los datos en una base de datos propia.
 
-El espejo completo (≈450 millones de observaciones) vive en PostgreSQL 15 +
-TimescaleDB con compresión columnar y agregados continuos para dashboards.
+El espejo completo (≈745 millones de observaciones en los 13 datasets estándar;
+precipitación sola ≈282 millones) vive en PostgreSQL 15 + TimescaleDB con
+compresión columnar y agregados continuos para dashboards.
 
 El modo servidor se instala **clonando el repositorio** (las carpetas `api/` y
 `deploy/` no viajan en el paquete pip):
@@ -33,13 +34,32 @@ deploy/                # Unidades systemd (backfill, delta, API)
 
 - **`backfill --mode year`**: carga por años descendentes con compresión del
   año al completarse (nunca insertar en chunks ya comprimidos), rotación de
-  App Tokens (`SOCRATA_APP_TOKENS`, separados por coma) y reanudación vía
-  tabla `ingest_state`.
+  App Tokens y reanudación vía tabla `ingest_state`.
 - **`delta`**: incremental diario desde el `hwm` (máxima fecha cargada),
   con `ON CONFLICT ... DO UPDATE` porque el IDEAM corrige valores históricos.
 - **API**: replica los contratos del frontend y agrega analítica (series
   temporales, climatología, estadísticas por región/estación), servida tras
   Cloudflare Tunnel.
+
+## Tokens de Socrata (rotación)
+
+A diferencia de la herramienta local —que usa un único `SOCRATA_APP_TOKEN`—, el
+ingestor del servidor admite un **pool** de App Tokens en la variable
+`SOCRATA_APP_TOKENS` (plural): varios tokens **separados por coma**. El backfill
+los rota en **round-robin** entre peticiones para repartir la carga y no agotar
+el límite de velocidad de un solo token durante las descargas masivas de años
+completos.
+
+```text
+# Un token (igual que la herramienta local):
+SOCRATA_APP_TOKEN=abc123
+
+# Pool rotatorio para el ingestor del servidor:
+SOCRATA_APP_TOKENS=token_uno,token_dos,token_tres
+```
+
+Si solo defines `SOCRATA_APP_TOKEN`, el ingestor también lo usa; el pool plural
+es para sostener el throughput del espejo completo.
 
 ## Secretos
 

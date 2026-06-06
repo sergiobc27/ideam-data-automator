@@ -77,8 +77,8 @@ del Capítulo 5 de la tesis.*
 - **Espejo de datos propio** (propuesta de tesis: *"almacenamiento en bases de
   datos locales o en la nube y ejecución programada de actualizaciones"*):
   subpaquete `ideam_socrata.db` que replica los 13 datasets hidrometeorológicos
-  (~745 millones de observaciones — la tesis trabajó los ~250M de
-  precipitación) en PostgreSQL 15 + TimescaleDB: hypertable comprimida,
+  (≈745 millones de observaciones — la tesis trabajó la precipitación,
+  ≈282M) en PostgreSQL 15 + TimescaleDB: hypertable comprimida,
   agregados continuos diario/mensual, backfill histórico paralelo y reanudable,
   y delta incremental diario (04:00) con upsert idempotente por `floating_id`.
 - **API HTTP** (propuesta de tesis: *"plataforma inteligente de monitoreo y
@@ -92,7 +92,7 @@ del Capítulo 5 de la tesis.*
   (compresión gzip en tránsito, ~2x más veloz) y `soda` (paginación clásica de
   la tesis). Con barra de progreso en vivo y panel de resumen.
 - **CLI — comando `datasets`**: tabla de los 13 datasets disponibles con su
-  tamaño aproximado (de los ~250M de precipitación de la tesis a los ~745M
+  tamaño aproximado (la precipitación de la tesis ≈282M dentro de los ≈745M
   totales hoy mapeados).
 - **CLI — validaciones amigables**: departamentos mal escritos sugieren la
   corrección ("¿Quisiste decir 'BOLIVAR'?") y se validan ANTES de ir a la red;

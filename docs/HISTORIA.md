@@ -89,7 +89,7 @@ no ser estrangulado por las cuotas anónimas.
 El trabajo de grado — *"Automatización Inteligente Para La Gestión Visual De
 Datos Hídricos Del IDEAM Con Python Y Power BI"* — formalizó el flujo:
 **Python extrae de Socrata → CSVs organizados por carpetas → ETL → tablero
-interactivo en Power BI**, enfocado en precipitación (~250 millones de
+interactivo en Power BI**, enfocado en precipitación (≈282 millones de
 registros disponibles).
 
 Los resultados empíricos hablaron solos:
