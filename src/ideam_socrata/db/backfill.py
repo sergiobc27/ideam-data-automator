@@ -136,6 +136,9 @@ def backfill_window(conn, dataset_id, col_fecha, start_iso, end_iso, chunksize):
 
 
 RAW_DIR = Path(os.getenv("BACKFILL_RAW_DIR", "/opt/ideam/raw"))
+# Exports masivos (.csv.gz, guardados SIN descomprimir: 6.8x menos disco) que
+# alimentan la carga local sin red. Ver split_bulk_local().
+BULK_DIR = Path(os.getenv("BACKFILL_BULK_DIR", "/opt/ideam/bulk"))
 
 
 def download_bulk_csv(dataset_id, attempts=3):
@@ -334,6 +337,14 @@ def backfill_window_disk(conn, dataset, start_iso, end_iso, chunksize):
 
 
 def backfill_year(conn, dataset, year, chunksize):
+    # Preferir el recorte local del export masivo (creado por split_bulk_local):
+    # carga a velocidad de COPY, sin Socrata (ni throttling) en el camino.
+    local = BULK_DIR / f"{dataset['id']}_{year}.csv"
+    if local.exists():
+        rows = _load_csv_file(conn, dataset, local, chunksize,
+                              report_label=f"{dataset['id']} {year} local")
+        local.unlink(missing_ok=True)  # ya cargado; libera disco
+        return rows
     return backfill_window_disk(
         conn, dataset,
         f"{year}-01-01T00:00:00.000", f"{year + 1}-01-01T00:00:00.000", chunksize,
@@ -356,6 +367,72 @@ def _load_dataset_year(dataset, year, chunksize):
     except Exception as exc:  # noqa: BLE001
         logger.error("Fallo %s %s: %s", dataset["id"], year, exc)
         return -1  # marca de error sin abortar todo el año
+
+
+def _split_done(conn, dataset_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM ingest_state WHERE source_dataset_id=%s "
+            "AND grain='split' AND status='done'",
+            (dataset_id,),
+        )
+        return cur.fetchone() is not None
+
+
+def split_bulk_local(dataset, years_needed, chunksize):
+    """Parte el export masivo .csv.gz local en CSVs por año (solo años pendientes).
+
+    Un solo pase de lectura por dataset. Las filas de años ya cargados y
+    COMPRIMIDOS (2019+) se descartan aquí y nunca llegan a la base — así jamás
+    se toca un chunk comprimido (la lección del 100x). Reanudable a nivel
+    dataset vía ingest_state grain='split'. Conserva los valores ORIGINALES
+    del export (encabezados CamelCase, fechas US): _load_csv_file ya sabe
+    normalizarlos, garantizando floating_id idéntico al de las otras rutas.
+    """
+    dataset_id, col_fecha = dataset["id"], dataset["fecha_col"]
+    src = BULK_DIR / f"{dataset_id}.csv.gz"
+    if not src.exists() or src.stat().st_size == 0:
+        return False
+    with get_conn() as conn:
+        if _split_done(conn, dataset_id):
+            logger.info("Split %s: ya hecho", dataset_id)
+            return True
+
+    years = {int(y) for y in years_needed}
+    # limpiar restos de un split anterior interrumpido (se regeneran completos)
+    for y in years:
+        (BULK_DIR / f"{dataset_id}_{y}.csv").unlink(missing_ok=True)
+
+    creados: set[int] = set()
+    escaneadas = 0
+    t0 = time.time()
+    next_report = 5_000_000
+    for chunk in pd.read_csv(src, dtype=str, chunksize=chunksize):
+        col_orig = next((c for c in chunk.columns
+                         if str(c).strip().lower() == col_fecha), None)
+        if col_orig is None:
+            logger.error("Split %s: el bulk no tiene columna %s", dataset_id, col_fecha)
+            return False
+        anios = _parse_bulk_dates(chunk[col_orig]).dt.year
+        escaneadas += len(chunk)
+        for y, sub in chunk.groupby(anios):  # NaT queda fuera (groupby ignora NaN)
+            y = int(y)
+            if y not in years:
+                continue
+            destino = BULK_DIR / f"{dataset_id}_{y}.csv"
+            sub.to_csv(destino, mode="a", header=y not in creados, index=False)
+            creados.add(y)
+        if escaneadas >= next_report:
+            rate = escaneadas / max(time.time() - t0, 1)
+            print(f"  split {dataset_id}: {escaneadas:,} filas escaneadas "
+                  f"({rate:,.0f}/s)", flush=True)
+            next_report += 5_000_000
+
+    with get_conn() as conn:
+        state.mark(conn, dataset_id, "split", "bulk", "done", rows_loaded=escaneadas)
+    print(f"  split {dataset_id}: COMPLETO {escaneadas:,} filas escaneadas -> "
+          f"{len(creados)} años pendientes en disco", flush=True)
+    return True
 
 
 def compress_year(conn, year):
@@ -395,6 +472,16 @@ def backfill_by_year(conn, datasets, chunksize, workers=4):
     pendientes = [y for y in all_years if str(y) not in done]
     print(f"AÑOS a procesar: {len(pendientes)} (de {min(all_years)} a {max(all_years)}), "
           f"descendente, {workers} datasets en paralelo por año", flush=True)
+
+    # Si hay exports masivos locales (.csv.gz en BULK_DIR), partirlos por año
+    # UNA sola vez: la carga año-a-año consumirá archivos locales (sin red).
+    con_bulk = [d for d in datasets if (BULK_DIR / f"{d['id']}.csv.gz").exists()
+                and (BULK_DIR / f"{d['id']}.csv.gz").stat().st_size > 0]
+    if con_bulk and pendientes:
+        print(f"SPLIT local: {len(con_bulk)} datasets con export masivo en {BULK_DIR}",
+              flush=True)
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="split") as pool:
+            list(pool.map(lambda d: split_bulk_local(d, pendientes, chunksize), con_bulk))
 
     for year in pendientes:
         t0 = time.time()
