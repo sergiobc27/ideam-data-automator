@@ -68,6 +68,16 @@ AVISO_LEGAL = (
 )
 
 
+# Aviso permanente sobre el alcance de la fuente (datos.gov.co / Socrata).
+# La API pública solo expone telemetría de estaciones AUTOMÁTICAS; los históricos
+# de estaciones convencionales (muchas zonas, pre-2016) viven solo en DHIME.
+AVISO_DHIME = (
+    "ℹ La fuente publica datos de estaciones automáticas; los históricos de "
+    "estaciones convencionales (en muchas zonas, anteriores a ~2016) solo están "
+    "en el portal DHIME del IDEAM."
+)
+
+
 def emoji_de(nombre: str) -> str:
     """Emoji representativo según la variable."""
     n = nombre.lower()
@@ -509,6 +519,7 @@ class IdeamTUI(App):
                 Selection("También exportar CSV (además de Parquet)", "csv", False),
                 id="lista-opciones",
             ),
+            Static(AVISO_DHIME, id="aviso-dhime", classes="pista"),
             Horizontal(
                 self._con_tip(Button("← Atrás", id="atras"), "Vuelve a departamentos."),
                 self._con_tip(Button("Descargar ⬇", id="descargar", variant="primary"),
@@ -564,6 +575,18 @@ class IdeamTUI(App):
         self.query_one("#rango-info", Shimmer).detener(linea)
         self.query_one("#f-ini", Input).value = str(gmin)
         self.query_one("#f-fin", Input).value = str(gmax)
+        # Si el inicio REAL del filtro es ≥2010, casi seguro es una estación
+        # automática instalada entonces: refuerza el aviso con el año concreto.
+        try:
+            ini_anio = int(cob["ini"][:4]) if cob.get("ini") else None
+        except (TypeError, ValueError):
+            ini_anio = None
+        if ini_anio is not None and ini_anio >= 2010:
+            self.query_one("#aviso-dhime", Static).update(
+                f"ℹ Tu zona solo tiene datos desde [b]{ini_anio}[/b]: su estación "
+                "automática se instaló entonces. Los registros convencionales "
+                "anteriores están solo en el portal DHIME del IDEAM."
+            )
 
     @on(Button.Pressed, "#descargar")
     def _iniciar(self) -> None:
