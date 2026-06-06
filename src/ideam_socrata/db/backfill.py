@@ -157,7 +157,10 @@ def download_bulk_csv(dataset_id, attempts=3):
     part = dest.with_suffix(".part")
     # --compressed: gzip en transito (no documentado pero funciona) -> el archivo
     # viaja 5-8x mas chico y la conexion termina antes del timeout del servidor.
+    # --max-time generoso (12h): seguro final contra esperas infinitas del
+    # primer byte; el export completo de precipitacion puede tomar horas.
     cmd = ["curl", "-sS", "--fail", "--compressed", "--connect-timeout", "30",
+           "--max-time", "43200",
            "--speed-limit", "1000", "--speed-time", "120", "-o", str(part), url]
     if APP_TOKEN:
         cmd[1:1] = ["-H", f"X-App-Token: {APP_TOKEN}"]
@@ -224,8 +227,13 @@ def download_window_csv(dataset_id, col_fecha, start_iso, end_iso, attempts=3):
     domain = DOMAIN if DOMAIN.startswith("http") else f"https://{DOMAIN}"
     where = f"{col_fecha} >= '{start_iso}' AND {col_fecha} < '{end_iso}'"
     part = dest.with_suffix(".part")
+    # --max-time es el seguro final: --speed-limit solo corta DURANTE la
+    # transferencia; si el servidor acepta la conexion y nunca envia el primer
+    # byte, curl espera infinito (cuelgue real de 7h visto el 2026-06-05).
+    # 6h es holgado: la ventana mas pesada (precipitacion-anio) toma ~3h.
     cmd = ["curl", "-sS", "--fail", "--compressed", "-G",
-           "--connect-timeout", "30", "--speed-limit", "500", "--speed-time", "300",
+           "--connect-timeout", "30", "--max-time", "21600",
+           "--speed-limit", "500", "--speed-time", "300",
            "--data-urlencode", f"$where={where}",
            "--data-urlencode", "$limit=500000000",
            "-o", str(part),
