@@ -430,8 +430,13 @@ def split_bulk_local(dataset, years_needed, chunksize):
 
     with get_conn() as conn:
         state.mark(conn, dataset_id, "split", "bulk", "done", rows_loaded=escaneadas)
+    # Liberar el .csv.gz: ya cumplió su función (split done, marcado en estado).
+    # Recupera disco progresivamente para que los CSV-por-año de TODOS los
+    # datasets no coincidan con los 16 GB de gz en el pico (margen de disco).
+    # Si el proceso muere luego, los años no cargados caen al fallback por red.
+    src.unlink(missing_ok=True)
     print(f"  split {dataset_id}: COMPLETO {escaneadas:,} filas escaneadas -> "
-          f"{len(creados)} años pendientes en disco", flush=True)
+          f"{len(creados)} años pendientes en disco (gz liberado)", flush=True)
     return True
 
 
