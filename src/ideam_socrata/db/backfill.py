@@ -539,8 +539,11 @@ def cierre_backfill(conn):
             y_max = (fila[1] or 2026) + 1
             for cagg in ("obs_diario", "obs_mensual"):
                 for y in range(y_min, y_max + 1):
+                    # casts explicitos: CALL no infiere el tipo de los parametros
+                    # (psycopg.errors.IndeterminateDatatype sin ellos)
                     cur.execute(
-                        f"CALL refresh_continuous_aggregate('{cagg}', %s, %s)",
+                        f"CALL refresh_continuous_aggregate('{cagg}', "
+                        f"%s::timestamptz, %s::timestamptz)",
                         (f"{y}-01-01", f"{y + 1}-01-01"),
                     )
                     print(f"CIERRE: {cagg} {y} refrescado", flush=True)
