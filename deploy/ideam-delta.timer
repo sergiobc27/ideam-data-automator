@@ -1,8 +1,28 @@
+# ============================================================
+# ideam-delta.timer
+# ------------------------------------------------------------
+# Dispara ideam-delta.service DOS veces al dia: 04:00 y 16:00
+# UTC. El IDEAM corrige valores historicos a lo largo del dia,
+# por eso un segundo pase vespertino reduce la latencia de las
+# correcciones (el delta hace ON CONFLICT DO UPDATE).
+#
+# NOTA UTC: estas unidades corren con el reloj del servidor en
+# UTC. Confirmar con `timedatectl` (Time zone: Etc/UTC). Si el
+# box estuviera en otra zona, ajustar las horas o anadir
+# `OnCalendar=` con sufijo de zona.
+#
+# INSTALACION:
+#   sudo install -m 644 deploy/ideam-delta.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ideam-delta.timer
+# Estado:  systemctl list-timers ideam-delta.timer
+# ============================================================
 [Unit]
-Description=Ejecuta el delta IDEAM todos los dias a las 04:00 (hora del servidor)
+Description=Ejecuta el delta IDEAM a las 04:00 y 16:00 UTC
 
 [Timer]
-OnCalendar=*-*-* 04:00:00
+OnCalendar=*-*-* 04:00:00 UTC
+OnCalendar=*-*-* 16:00:00 UTC
 Persistent=true
 RandomizedDelaySec=600
 
