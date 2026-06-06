@@ -1,0 +1,20 @@
+# ============================================================
+# ideam-watchdog.timer
+# ------------------------------------------------------------
+# Dispara ideam-watchdog.service cada 15 minutos (en los
+# minutos 0, 15, 30, 45 de cada hora). Persistent=true para que
+# tras un reinicio del box ejecute lo perdido cuanto antes.
+#
+# INSTALACION (habilita ESTE timer, no el .service):
+#   sudo systemctl enable --now ideam-watchdog.timer
+# Estado:  systemctl list-timers ideam-watchdog.timer
+# ============================================================
+[Unit]
+Description=Dispara el watchdog del backfill IDEAM cada 15 min
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

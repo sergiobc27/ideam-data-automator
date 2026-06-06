@@ -1,0 +1,17 @@
+# ============================================================
+# ideam-watchdog.service
+# ------------------------------------------------------------
+# Unidad oneshot disparada por ideam-watchdog.timer cada 15 min.
+# Ejecuta /usr/local/bin/ideam-watchdog.sh, que reinicia el
+# backfill SOLO si lo detecta atascado (ver el .sh para la
+# heuristica). No se habilita directamente; se habilita el .timer.
+#
+# INSTALACION: ver cabecera de deploy/ideam-watchdog.sh
+# ============================================================
+[Unit]
+Description=Watchdog del backfill IDEAM (reinicia si esta atascado)
+After=ideam-backfill.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ideam-watchdog.sh

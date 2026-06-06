@@ -33,6 +33,7 @@ Backup/
 docs/*
 !docs/HISTORIA.md
 !docs/SERVIDOR.md
+!docs/RUNBOOK.md
 logs/
 scratch/
 *.log
