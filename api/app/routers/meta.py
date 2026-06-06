@@ -33,10 +33,13 @@ def meta():
 @router.get("/api/date-range")
 def date_range(datasetId: str):
     dataset = get_dataset(datasetId)
+    # min/max desde obs_diario (agregado continuo): instantáneo. Sobre la
+    # hypertable cruda, los datasets que terminaron en el pasado (los de mar,
+    # hasta 2020) obligaban a un ChunkAppend hacia atrás desde 2026 saltando
+    # ~6 años de chunks vacíos -> timeout de 30s. obs_diario ya tiene el rango.
     with pool.connection() as conn:
         row = conn.execute(
-            "SELECT min(fechaobservacion), max(fechaobservacion) "
-            "FROM observaciones WHERE source_dataset_id = %s",
+            "SELECT min(dia), max(dia) FROM obs_diario WHERE source_dataset_id = %s",
             (dataset["id"],),
         ).fetchone()
     start, end = row

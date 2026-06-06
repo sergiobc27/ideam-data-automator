@@ -40,6 +40,28 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _mv_filter(payload):
+    """WHERE para mv_catalogo (vista materializada, instantánea) desde el payload:
+    dataset + departamentos + filtros de catálogo que viven en la vista. Evita el
+    GROUP BY sobre la hypertable cruda (764M filas) que daba timeout de 30s en los
+    desplegables de departamentos grandes."""
+    dataset = get_dataset(payload.datasetId)
+    canonicals = validate_required_departments(payload.departments)
+    variants = set()
+    for canonical in canonicals:
+        variants.update(department_variants(canonical))
+    clauses = ["source_dataset_id = %(dataset_id)s", "upper(departamento) = ANY(%(deps)s)"]
+    params = {"dataset_id": dataset["id"], "deps": sorted(variants)}
+    filters = getattr(payload, "catalogFilters", None) or {}
+    if filters.get("municipalities"):
+        clauses.append("upper(municipio) = ANY(%(municipios)s)")
+        params["municipios"] = [str(m).upper() for m in filters["municipalities"]]
+    if filters.get("hydrologicZones"):
+        clauses.append("upper(zonahidrografica) = ANY(%(zonas)s)")
+        params["zonas"] = [str(z).upper() for z in filters["hydrologicZones"]]
+    return " AND ".join(clauses), params, dataset
+
+
 @router.post("/api/catalog-bundle")
 def catalog_bundle(payload: CatalogBundlePayload, request: Request):
     _catalog_rate(request)
@@ -76,7 +98,7 @@ def catalog_options(payload: CatalogOptionsPayload, request: Request):
     if not definition:
         raise HTTPException(400, "attributeKey invalido.")
 
-    where, params, _dataset, _canonicals = build_filters(payload)
+    where, params, _dataset = _mv_filter(payload)
     column = definition["column"]
     label_column = definition.get("labelColumn")
 
@@ -87,7 +109,7 @@ def catalog_options(payload: CatalogOptionsPayload, request: Request):
 
     with pool.connection() as conn:
         rows = conn.execute(
-            f"SELECT {select}, count(*)::bigint AS total FROM observaciones "
+            f"SELECT {select}, sum(total)::bigint AS total FROM mv_catalogo "
             f"WHERE {where} AND {column} IS NOT NULL GROUP BY {group} ORDER BY {group} LIMIT 5000",
             params,
         ).fetchall()
@@ -110,12 +132,12 @@ def catalog_options(payload: CatalogOptionsPayload, request: Request):
 @router.post("/api/stations-helper")
 def stations_helper(payload: QueryPayload, request: Request):
     _catalog_rate(request)
-    where, params, _dataset, _canonicals = build_filters(payload)
+    where, params, _dataset = _mv_filter(payload)
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT codigoestacion, max(nombreestacion), max(departamento), max(municipio), "
-            "       max(zonahidrografica), count(*)::bigint "
-            f"FROM observaciones WHERE {where} GROUP BY codigoestacion "
+            "       max(zonahidrografica), sum(total)::bigint "
+            f"FROM mv_catalogo WHERE {where} GROUP BY codigoestacion "
             "ORDER BY 2 NULLS LAST LIMIT 500",
             params,
         ).fetchall()

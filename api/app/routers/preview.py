@@ -1,4 +1,5 @@
 import time
+from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -83,12 +84,17 @@ def _resumen_desde_agregado(conn, payload, dataset):
         clauses.append("codigoestacion = ANY(%(estaciones)s)")
         params["estaciones"] = sorted(codigos)
 
+    # Rango medio-abierto alineado a UTC: las cubetas de obs_diario están a
+    # medianoche UTC (time_bucket sobre timestamptz). Comparar contra fechas
+    # locales -05 desalineaba y una ventana de 1 día devolvía 0 (off-by-one).
+    # [start 00:00 UTC, (end+1) 00:00 UTC) incluye la cubeta del día final.
     if payload.startDate:
         clauses.append("dia >= %(start)s")
-        params["start"] = f"{payload.startDate}"
+        params["start"] = f"{payload.startDate}T00:00:00+00:00"
     if payload.endDate:
-        clauses.append("dia <= %(end)s")
-        params["end"] = f"{payload.endDate}"
+        end_excl = date.fromisoformat(str(payload.endDate)) + timedelta(days=1)
+        clauses.append("dia < %(end)s")
+        params["end"] = f"{end_excl.isoformat()}T00:00:00+00:00"
 
     where = " AND ".join(clauses)
     fila = conn.execute(
@@ -119,11 +125,23 @@ def preview(payload: QueryPayload, request: Request):
     with pool.connection() as conn:
         (row_count, stations, municipalities, departments, zones,
          start, end) = _resumen_desde_agregado(conn, payload, dataset)
-        rows = conn.execute(
-            f"SELECT {cols} FROM observaciones WHERE {where} "
-            "ORDER BY fechaobservacion DESC LIMIT %(limit)s",
-            {**params, "limit": settings.preview_limit},
-        ).fetchall()
+        # Acotar el ORDER BY ... DESC con el techo real del dataset (max de
+        # obs_diario): sin esto, en datasets que terminaron en el pasado (mar,
+        # hasta 2020) el ChunkAppend arrancaba en 2026 y recorría ~6 años de
+        # chunks vacíos antes de juntar 200 filas -> timeout. Con el techo,
+        # el scan empieza en el chunk correcto. Si no hay filas, se omite.
+        row_params = dict(params, limit=settings.preview_limit)
+        techo = ""
+        if end is not None and "end" not in params:
+            row_params["preview_techo"] = end + timedelta(days=1)
+            techo = " AND fechaobservacion < %(preview_techo)s"
+        rows = []
+        if row_count:
+            rows = conn.execute(
+                f"SELECT {cols} FROM observaciones WHERE {where}{techo} "
+                "ORDER BY fechaobservacion DESC LIMIT %(limit)s",
+                row_params,
+            ).fetchall()
     station_filters = (payload.catalogFilters or {}).get("stations") or []
 
     return {
