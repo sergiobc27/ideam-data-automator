@@ -1,13 +1,29 @@
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 
 from ..db import pool
 from ..models import QueryPayload
 from ..normalize import build_filters
+from ..ratelimit import check_rate_limit
 from ..settings import settings
 
 router = APIRouter()
+
+
+def _client_ip(request: Request):
+    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
+
+
+def _lectura_rate(request: Request):
+    ok, _remaining, retry = check_rate_limit(
+        "lectura", _client_ip(request), settings.rate_limit_catalog_per_hour
+    )
+    if not ok:
+        raise HTTPException(
+            429,
+            f"Limite de consultas alcanzado. Intenta de nuevo en {max(retry // 60, 1)} minuto(s).",
+        )
 
 ROW_COLUMNS = [
     "source_dataset_id", "codigoestacion", "codigosensor", "fechaobservacion",
@@ -25,7 +41,8 @@ def _serialize(row):
 
 
 @router.post("/api/preview")
-def preview(payload: QueryPayload):
+def preview(payload: QueryPayload, request: Request):
+    _lectura_rate(request)
     t0 = time.time()
     where, params, dataset, _canonicals = build_filters(payload)
     cols = ", ".join(ROW_COLUMNS)

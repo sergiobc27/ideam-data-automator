@@ -54,6 +54,24 @@ BATCH_SIZE = 50_000
 VALID_FORMATS = ("csv", "json", "parquet")
 
 
+class ExportTooLargeError(Exception):
+    """El ZIP superó EXPORT_MAX_BYTES durante la escritura: se aborta el job."""
+
+
+def _zip_bytes_written(zf, fallback_path):
+    """Bytes escritos hasta ahora en el ZIP (candado de tamaño en disco)."""
+    fp = getattr(zf, "fp", None)
+    if fp is not None:
+        try:
+            return fp.tell()
+        except (OSError, ValueError):
+            pass
+    try:
+        return fallback_path.stat().st_size
+    except OSError:
+        return 0
+
+
 def slug(value):
     text = "" if value is None else str(value).strip().lower()
     text = unicodedata.normalize("NFKD", text)
@@ -262,6 +280,18 @@ def _run_job(job_id):
                     for _fmt, path in writers.paths.items():
                         zf.write(path, path.relative_to(workdir).as_posix())
                         path.unlink()
+                    # Candado anti-DoS/costo: corta si el ZIP excede el tope.
+                    written = _zip_bytes_written(zf, zip_path)
+                    if written > settings.export_max_bytes:
+                        raise ExportTooLargeError(
+                            f"La exportacion supero el limite de "
+                            f"{settings.export_max_bytes:,} bytes. Acota los filtros e "
+                            "intenta de nuevo.".replace(",", ".")
+                        )
+    except ExportTooLargeError:
+        # ZIP parcial inservible: bórralo para no dejar basura en disco.
+        zip_path.unlink(missing_ok=True)
+        raise
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
