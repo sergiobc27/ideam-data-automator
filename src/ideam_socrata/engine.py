@@ -153,7 +153,7 @@ def _bajar_bloque(dataset_id, col_fecha, anio, mes, filtros, descripcion):
 
 def descargar(
     dataset_id, col_fecha, tareas, dict_reemplazo, var_nombre,
-    base_dir="data", include_csv=False, on_progress=None, query_info=None,
+    base_dir=None, include_csv=False, on_progress=None, query_info=None,
 ):
     """Descarga (estándar o especial) según las tareas dadas y exporta por carpetas.
 
@@ -161,6 +161,9 @@ def descargar(
     sin fecha, usar (None, None, filtros). Devuelve un dict de resumen.
     on_progress(bloques_hechos, total_bloques, filas_brutas) por cada bloque.
     """
+    if base_dir is None:
+        from .config import DOWNLOAD_DIR
+        base_dir = str(DOWNLOAD_DIR)
     t0 = time.time()
     resultados = []
     total = len(tareas)

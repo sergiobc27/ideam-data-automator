@@ -35,13 +35,14 @@ from .config import (
     CLIENT,
     DATASETS_INFO,
     DOMAIN,
+    DOWNLOAD_DIR,
     LIMIT,
     MAX_WORKERS,
     MAPEO_DEPARTAMENTOS,
     console,
 )
 from .core import intentar
-from .exporting import export_by_department_municipality
+from .exporting import export_by_department_municipality, write_coverage_report
 from .query_validation import build_department_filter
 from .transform import deduplicate_observations, normalize_chunk, normalize_label, parse_export_dates
 
@@ -190,7 +191,7 @@ def download(
     start_date: str,
     end_date: str,
     include_csv: bool = False,
-    base_dir: str = "data",
+    base_dir: str | None = None,
     workers: int | None = None,
     engine: str = "rapido",
     quiet: bool = False,
@@ -214,6 +215,8 @@ def download(
         raise SystemExit("Indica al menos un departamento con --department.")
     if engine not in ("rapido", "soda"):
         raise SystemExit("engine debe ser 'rapido' o 'soda'.")
+    if base_dir is None:
+        base_dir = str(DOWNLOAD_DIR)
 
     canonicos = _validar_departamentos(departments)
     _validar_fechas(start_date, end_date)
@@ -323,6 +326,17 @@ def download(
     df, duplicados = deduplicate_observations(df, col_fecha)
     outputs = export_by_department_municipality(df, nombre, base_dir=base_dir, include_csv=include_csv)
     total_csv = sum(len(output["csv"]) for output in outputs)
+    # RESUMEN de cobertura también en el modo scriptable (antes solo lo generaba
+    # la TUI): el camino más reproducible no puede ser el único sin metadato.
+    reporte = write_coverage_report(
+        df, nombre, base_dir, date_column=col_fecha, duplicates=duplicados,
+        query_info={
+            "Dataset": f"{nombre} ({dataset_id})",
+            "Departamentos": ", ".join(canonicos),
+            "Periodo solicitado": f"{start_date} a {end_date}",
+            "Motor": engine,
+        },
+    )
 
     summary = {
         "dataset": dataset_id,
@@ -332,6 +346,7 @@ def download(
         "files_parquet": len(outputs),
         "files_csv": total_csv,
         "output_dir": base_dir,
+        "report": reporte,
         "seconds": round(time.time() - t0, 1),
     }
     if not quiet:
@@ -340,7 +355,8 @@ def download(
                 f"[texto]Filas únicas: [bold]{summary['rows']:,}[/bold]\n"
                 f"Duplicados eliminados: {duplicados:,}\n"
                 f"Archivos generados: {len(outputs)} parquet · {total_csv} csv\n"
-                f"Carpeta: {base_dir}/\n"
+                f"Carpeta: [bold]{Path(base_dir).resolve()}[/bold]\n"
+                f"Resumen de cobertura: {Path(reporte).name}\n"
                 f"Tiempo: {summary['seconds']}s · motor {engine}[/texto]",
                 title="[bold exito] DESCARGA COMPLETA [/bold exito]",
                 border_style="exito",

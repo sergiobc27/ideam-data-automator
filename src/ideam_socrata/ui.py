@@ -37,11 +37,11 @@ def mostrar_logo():
     """Renderiza el logo CUC centrado en consola."""
     console.print(Align.center(build_logo_text()))
 
-def espera_estetica(mensaje: str, spinner_type: str = "dots", tiempo: float = 0.4):
-    """Muestra una animación corta para mejorar la fluidez visual."""
-    import time
-    with console.status(f"[s_bold]{mensaje}[/s_bold]", spinner=spinner_type):
-        time.sleep(tiempo)
+def espera_estetica(mensaje: str, spinner_type: str = "dots", tiempo: float = 0.0):
+    """Antes pausaba la app a propósito (time.sleep) para 'simular' procesamiento;
+    eso solo hacía sentir lenta la herramienta. Ahora es un no-op: las operaciones
+    reales (red) ya muestran su propio spinner cuando toca."""
+    return
 
 def mostrar_menu_opciones(titulo: str, opciones: list):
     """Muestra un menú numerado centrado."""
@@ -106,13 +106,13 @@ def mostrar_panel_resumen(estado, paso_actual: int):
     
     # Paso 1: Departamentos
     if paso_actual == 1:
-        table.add_row("[s_bold]➤ 1. Departamentos[/s_bold]", "[blink s_bold]Esperando selección...[/blink s_bold]")
+        table.add_row("[s_bold]➤ 1. Departamentos[/s_bold]", "[s_bold]Esperando selección...[/s_bold]")
     else:
         table.add_row("[bold green]✔ 1. Departamentos[/bold green]", f"[green]{res.get('deps', 'Todos')}[/green]")
 
     # Paso 2: Filtros Avanzados
     if paso_actual == 2:
-        table.add_row("[s_bold]➤ 2. Filtros Especializados[/s_bold]", "[blink s_bold]Configurando filtros...[/blink s_bold]")
+        table.add_row("[s_bold]➤ 2. Filtros Especializados[/s_bold]", "[s_bold]Configurando filtros...[/s_bold]")
     elif paso_actual > 2:
         av = res.get("avanzados", {})
         text_av = " | ".join([f"{k}: {', '.join(v)}" for k, v in av.items()]) if av else "Ninguno"
@@ -120,7 +120,7 @@ def mostrar_panel_resumen(estado, paso_actual: int):
 
     # Paso 3: Rango de Años
     if paso_actual == 3:
-        table.add_row("[s_bold]➤ 3. Temporalidad[/s_bold]", "[blink s_bold]Calculando años...[/blink s_bold]")
+        table.add_row("[s_bold]➤ 3. Temporalidad[/s_bold]", "[s_bold]Calculando años...[/s_bold]")
     elif paso_actual > 3:
         anios = f"{estado.get('anio_ini')} a {estado.get('anio_fin')}"
         table.add_row("[bold green]✔ 3. Temporalidad[/bold green]", f"[green]{anios}[/green]")

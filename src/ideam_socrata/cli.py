@@ -99,7 +99,8 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--start-date", required=True, help="YYYY-MM-DD (inclusive)")
     download.add_argument("--end-date", required=True, help="YYYY-MM-DD (exclusivo)")
     download.add_argument("--csv", action="store_true", help="Exportar tambien copias CSV")
-    download.add_argument("--output-dir", default="data", help="Carpeta destino (default: data)")
+    download.add_argument("--output-dir", default=None,
+                          help="Carpeta destino (default: Documentos/IDEAM_Data)")
     download.add_argument("--workers", type=int, default=None, help="Bloques mensuales en paralelo")
     download.add_argument(
         "--engine", choices=["rapido", "soda"], default="rapido",

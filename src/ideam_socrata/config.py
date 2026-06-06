@@ -5,6 +5,17 @@ from sodapy import Socrata
 from rich.console import Console
 from rich.theme import Theme
 
+# Cargar variables desde un archivo .env si existe (token de Socrata, etc.).
+# Antes el README pedía crear .env pero NADIE lo leía: el token se ignoraba en
+# silencio. Se busca en el directorio actual y hacia arriba. Sin python-dotenv
+# instalado, simplemente se omite (las variables de entorno del sistema siguen).
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 # -------------- CONFIGURACIÓN GLOBAL -----------------
 APP_TOKEN     = os.getenv("SOCRATA_APP_TOKEN")
 DOMAIN        = os.getenv("SOCRATA_DOMAIN", "www.datos.gov.co")
@@ -13,6 +24,13 @@ SOCRATA_PASSWORD = os.getenv("SOCRATA_PASSWORD")
 CATALOG_DATASET_ID = "hp9r-jxuu" # Catálogo Nacional Estaciones
 BASE_DIR      = Path(__file__).parent.parent
 CARPETA_BASE  = BASE_DIR / "data" / "processed" / "datos_ideam"
+
+# Carpeta destino por defecto de las descargas: ruta ABSOLUTA y predecible bajo
+# los Documentos del usuario (antes era 'data' relativo al terminal -> el usuario
+# no programador no encontraba sus archivos). Configurable con IDEAM_OUTPUT_DIR.
+DOWNLOAD_DIR = Path(
+    os.getenv("IDEAM_OUTPUT_DIR", str(Path.home() / "Documents" / "IDEAM_Data"))
+)
 
 # Configuración de Logging
 LOG_DIR = BASE_DIR / 'logs'
@@ -43,7 +61,10 @@ tema_uc = Theme({
     "s_bold": "bold #FCD116",
     "t_bold": "bold #CCCCCC"
 })
-console = Console(theme=tema_uc, force_terminal=True)
+# force_terminal=True forzaba colores ANSI SIEMPRE: al redirigir la salida
+# (`ideam-socrata datasets > lista.txt`) el archivo salía lleno de códigos de
+# escape. Dejar que rich detecte el destino y respetar la convención NO_COLOR.
+console = Console(theme=tema_uc, no_color=bool(os.getenv("NO_COLOR")))
 
 if not APP_TOKEN:
     logging.warning("SOCRATA_APP_TOKEN no esta definido; se usara lectura anonima si Socrata lo permite.")

@@ -13,11 +13,14 @@ Lanzar con:  ideam-socrata tui
 
 from __future__ import annotations
 
+import os
 import time
+from pathlib import Path
 
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
+from textual.command import Hit, Hits, Provider
 from textual.content import Content
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
@@ -259,9 +262,33 @@ class FiltrosScreen(ModalScreen):
             self.dismiss()
 
 
+class ComandosIdeam(Provider):
+    """Comandos propios para el command palette (Ctrl+P), además de los del
+    sistema (cambiar tema, salir). Búsqueda difusa: escribe 'carp' y aparece."""
+
+    @property
+    def _comandos(self):
+        app = self.app
+        return [
+            ("Nueva consulta", "Reinicia el asistente desde el inicio", app.action_reiniciar),
+            ("Abrir carpeta de descargas", "Abre la carpeta donde se guardan los datos",
+             app.action_abrir_carpeta),
+            ("Atrás", "Vuelve al paso anterior", app.action_atras),
+            ("Salir", "Cierra la aplicación", app.action_quit),
+        ]
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        for nombre, ayuda, accion in self._comandos:
+            score = matcher.match(nombre)
+            if score > 0:
+                yield Hit(score, matcher.highlight(nombre), accion, help=ayuda)
+
+
 class IdeamTUI(App):
     TITLE = "IDEAM Data Automator"
     SUB_TITLE = "Asistente de descarga"
+    COMMANDS = App.COMMANDS | {ComandosIdeam}
 
     CSS = f"""
     Screen {{ align: center top; }}
@@ -289,6 +316,7 @@ class IdeamTUI(App):
         ("q", "quit", "Salir"),
         ("escape", "atras", "Atrás"),
         ("n", "reiniciar", "Nueva consulta"),
+        ("o", "abrir_carpeta", "Abrir carpeta"),
     ]
 
     def __init__(self) -> None:
@@ -303,6 +331,21 @@ class IdeamTUI(App):
         self.dict_reemplazo: dict = {}
         self.avanzados: dict[str, list[str]] = {}
         self.codigos_manuales: set[str] = set()
+        self._ultimo_output: str | None = None  # carpeta de la última descarga
+
+    def action_abrir_carpeta(self) -> None:
+        """Abre la carpeta de descargas en el explorador (o muestra la ruta)."""
+        from .config import DOWNLOAD_DIR
+        destino = Path(self._ultimo_output or DOWNLOAD_DIR)
+        try:
+            destino.mkdir(parents=True, exist_ok=True)
+            if hasattr(os, "startfile"):  # Windows
+                os.startfile(destino)  # noqa: S606
+                self.notify(f"Abriendo {destino}")
+            else:
+                self.notify(f"Carpeta de descargas: {destino}", timeout=8)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"No se pudo abrir: {exc}", severity="warning")
 
     # ---------- composición base ----------
     def compose(self) -> ComposeResult:
@@ -689,12 +732,14 @@ class IdeamTUI(App):
                 f"[{GRIS}]Filas únicas:[/] [b]{r['rows']:,}[/b]"
                 + (f"   ([{GRIS}]{r['duplicates']:,} duplicados depurados[/])" if r.get("duplicates") else "")
                 + f"\n[{GRIS}]Archivos:[/] {r['files_parquet']} parquet · {r['files_csv']} csv\n"
-                f"[{GRIS}]Carpeta:[/] {r['output_dir']}/\n"
-                + (f"[{GRIS}]Resumen de cobertura:[/] {r['report']}\n" if r.get("report") else "")
+                f"[{GRIS}]Carpeta:[/] [b]{Path(r['output_dir']).resolve()}[/b]\n"
+                + (f"[{GRIS}]Resumen de cobertura:[/] {Path(r['report']).name}\n" if r.get("report") else "")
                 + f"[{GRIS}]Tiempo:[/] {r['seconds']}s"
             )
+        self._ultimo_output = r.get("output_dir")
         self.query_one("#estado", Static).update(
-            msg + f"\n\n[{GRIS}]Pulsa [b]N[/b] para otra consulta o [b]Q[/b] para salir.[/]")
+            msg + f"\n\n[{GRIS}]Pulsa [b]O[/b] abrir carpeta · [b]N[/b] otra consulta · "
+            f"[b]Q[/b] salir · [b]Ctrl+P[/b] comandos[/]")
 
     def _err(self, msg: str) -> None:
         self.query_one("#shimmer-dl", Shimmer).detener("")

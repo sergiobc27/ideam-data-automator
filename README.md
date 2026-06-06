@@ -16,11 +16,25 @@ y organizar los archivos.
 
 ## Instalación
 
+Requiere Python 3.10+. La forma recomendada es **pipx**, que instala la
+herramienta de forma aislada y deja el comando `ideam-socrata` listo en tu PATH:
+
 ```powershell
-pip install ideam-data-automator
+pip install --user pipx
+pipx ensurepath
+pipx install ideam-data-automator
 ```
 
-(Requiere Python 3.10+. También puedes clonar el repo y usar `pip install .`)
+Cierra y vuelve a abrir la terminal tras `pipx ensurepath`. También funciona el
+clásico `pip install ideam-data-automator`.
+
+> **¿La terminal dice "ideam-socrata no se reconoce como comando"?**
+> Es que la carpeta de scripts de Python no quedó en el PATH (pasa seguido en
+> Windows). Dos salidas: (a) usa `pipx` como arriba, que lo arregla; o (b)
+> ejecuta siempre anteponiendo `python -m`:
+> ```powershell
+> python -m ideam_socrata.cli tui
+> ```
 
 ## Uso
 
@@ -65,6 +79,9 @@ ideam-socrata download --dataset s54a-sgyg --department ATLANTICO `
 
 ## Qué obtienes
 
+- **Dónde quedan tus archivos**: por defecto en `Documentos\IDEAM_Data\`
+  (puedes cambiarlo con `--output-dir` o la variable `IDEAM_OUTPUT_DIR`). La TUI
+  muestra la ruta exacta al terminar y la tecla **O** abre la carpeta.
 - Archivos organizados por carpetas: `DEPARTAMENTO/MUNICIPIO/variable_*.parquet|csv`.
 - **Fechas reales** (no texto): el CSV abre en Excel con filtros de fecha
   funcionales y el Parquet trae timestamps nativos para PowerBI/pandas.
