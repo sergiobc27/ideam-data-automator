@@ -43,6 +43,25 @@ class QueryExportHelperTests(unittest.TestCase):
         self.assertEqual(df.loc[0, "departamento"], "ATLANTICO")
         self.assertIn("floating_id", df.columns)
 
+    def test_san_andres_incluye_variantes_reales(self):
+        """San Andrés vive bajo nombres tipo 'ARCHIPIÉLAGO DE SAN ANDRES...' en la
+        fuente (verificado en vivo 2026-06-06); el filtro debe cubrirlos o el
+        departamento devuelve 0 filas."""
+        from ideam_socrata.config import MAPEO_DEPARTAMENTOS
+
+        where, replacements, variants = build_department_filter(
+            ["SAN ANDRES Y PROVIDENCIA"], MAPEO_DEPARTAMENTOS
+        )
+        self.assertIn("'ARCHIPIELAGO DE SAN ANDRES PROVIDENCIA Y SANTA CATALINA'", where)
+        self.assertIn("'ARCHIPIÉLAGO DE SAN ANDRES PROVIDENCIA Y SANTA CATALINA'", where)
+        self.assertIn("'ARCHIPIELAGO DE SAN ANDRES, PROVIDENCIA Y SANTA CATALINA'", where)
+        self.assertIn("'SAN ANDRÉS PROVIDENCIA'", where)
+        # todas las variantes normalizan al canonico
+        self.assertEqual(
+            replacements["ARCHIPIELAGO DE SAN ANDRES PROVIDENCIA Y SANTA CATALINA"],
+            "SAN ANDRES Y PROVIDENCIA",
+        )
+
     def test_csv_dates_are_excel_friendly(self):
         data = [
             {

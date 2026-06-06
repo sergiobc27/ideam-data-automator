@@ -490,12 +490,61 @@ def backfill_by_year(conn, datasets, chunksize, workers=4):
             resultados = list(pool.map(lambda d: _load_dataset_year(d, year, chunksize), objetivos))
         filas = sum(r for r in resultados if r > 0)
         errores = sum(1 for r in resultados if r < 0)
-        # comprimir el año recien cerrado (libera disco antes del siguiente)
-        comp = compress_year(conn, year)
-        estado = "done" if errores == 0 else "error"
-        state.mark(conn, "__year__", "year", str(year), estado, rows_loaded=filas)
+        if errores == 0:
+            # comprimir el año recien cerrado (libera disco antes del siguiente)
+            comp = compress_year(conn, year)
+            state.mark(conn, "__year__", "year", str(year), "done", rows_loaded=filas)
+        else:
+            # NO comprimir un año con fallos: el reintento debe poder escribir
+            # en estos chunks (insertar en chunks comprimidos = 100x mas lento).
+            comp = 0
+            state.mark(conn, "__year__", "year", str(year), "error", rows_loaded=filas)
+            logger.warning("Año %s con %s datasets fallidos: queda SIN comprimir "
+                           "para que el reintento sea barato", year, errores)
         print(f"  AÑO {year}: {filas:,} filas, {comp} chunks comprimidos, "
               f"{errores} datasets con error, {(time.time()-t0)/60:.1f} min", flush=True)
+
+    # Cierre automatico: si TODO el historico quedo cargado, refrescar agregados
+    # (las politicas solo miran la ventana reciente: sin esto, los dashboards no
+    # verian 2001-2018 pese a estar en la base).
+    done_final = _years_done(conn)
+    if all(str(y) in done_final for y in all_years):
+        cierre_backfill(conn)
+
+
+def cierre_backfill(conn):
+    """Cierre tras cargar el histórico completo.
+
+    1) Refresca los continuous aggregates en TODO el rango (las políticas solo
+       refrescan la ventana reciente; sin esto los dashboards no ven 2001-2018).
+       Se refresca AÑO POR AÑO con print por paso: mantiene el journal vivo
+       (el watchdog reinicia si hay >60 min de silencio) y acota cada paso.
+    2) ANALYZE para que el planeador conozca la distribución real.
+    """
+    conn.commit()
+    prev_autocommit = conn.autocommit
+    conn.autocommit = True  # refresh_continuous_aggregate no admite transacción
+    try:
+        with conn.cursor() as cur:
+            # rango real desde la hypertable (rapido: exclusion por chunks)
+            cur.execute("SELECT extract(year FROM min(fechaobservacion))::int, "
+                        "extract(year FROM max(fechaobservacion))::int FROM observaciones")
+            fila = cur.fetchone()
+            y_min = min(fila[0] or 2000, 2000)
+            y_max = (fila[1] or 2026) + 1
+            for cagg in ("obs_diario", "obs_mensual"):
+                for y in range(y_min, y_max + 1):
+                    cur.execute(
+                        f"CALL refresh_continuous_aggregate('{cagg}', %s, %s)",
+                        (f"{y}-01-01", f"{y + 1}-01-01"),
+                    )
+                    print(f"CIERRE: {cagg} {y} refrescado", flush=True)
+            print("CIERRE: ANALYZE observaciones/estaciones...", flush=True)
+            cur.execute("ANALYZE observaciones")
+            cur.execute("ANALYZE estaciones")
+    finally:
+        conn.autocommit = prev_autocommit
+    print("CIERRE COMPLETO: agregados y estadísticas al día", flush=True)
 
 
 def _process_year(dataset, year, chunksize):
