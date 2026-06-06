@@ -43,16 +43,42 @@ class ValidacionesTests(unittest.TestCase):
 
 
 class MonthBlocksTests(unittest.TestCase):
-    def test_single_month(self):
-        self.assertEqual(month_blocks("2024-01-01", "2024-01-31"), [(2024, 1)])
+    """month_blocks devuelve ventanas (lo, hi) RECORTADAS, hi exclusivo."""
 
-    def test_year_boundary(self):
+    def test_single_month(self):
+        self.assertEqual(
+            month_blocks("2024-01-01", "2024-01-31"),
+            [("2024-01-01", "2024-01-31")],
+        )
+
+    def test_year_boundary_recorta_primero_y_ultimo(self):
         blocks = month_blocks("2023-11-15", "2024-02-01")
-        self.assertEqual(blocks, [(2023, 11), (2023, 12), (2024, 1), (2024, 2)])
+        self.assertEqual(blocks, [
+            ("2023-11-15", "2023-12-01"),
+            ("2023-12-01", "2024-01-01"),
+            ("2024-01-01", "2024-02-01"),
+        ])
 
     def test_multi_year_count(self):
         blocks = month_blocks("2020-01-01", "2022-12-31")
         self.assertEqual(len(blocks), 36)
+        # el último bloque termina EXACTAMENTE en end_date (exclusivo)
+        self.assertEqual(blocks[-1], ("2022-12-01", "2022-12-31"))
+
+    def test_end_date_exclusivo_no_trae_el_mes_siguiente(self):
+        """Regresión P3 (auditoría de aceptación): pedir hasta 2024-02-01
+        EXCLUSIVO bajaba todo febrero (17,726 filas de más)."""
+        blocks = month_blocks("2024-01-01", "2024-02-01")
+        self.assertEqual(blocks, [("2024-01-01", "2024-02-01")])
+        # y ningún bloque puede pisar el día final
+        for _lo, hi in blocks:
+            self.assertLessEqual(hi, "2024-02-01")
+
+    def test_rango_dentro_de_un_mes(self):
+        self.assertEqual(
+            month_blocks("2024-01-15", "2024-01-20"),
+            [("2024-01-15", "2024-01-20")],
+        )
 
 
 class ParseExportDatesTests(unittest.TestCase):

@@ -102,51 +102,62 @@ def _validar_fechas(start_date: str, end_date: str) -> None:
 
 
 def month_blocks(start_date: str, end_date: str):
-    """Bloques (anio, mes) que cubren [start_date, end_date)."""
+    """Ventanas mensuales RECORTADAS que cubren exactamente [start_date, end_date).
+
+    Devuelve pares (lo, hi) en ISO (hi EXCLUSIVO). Antes devolvía meses
+    calendario completos y el primer/último bloque traían días de más: pedir
+    2024-01-01→2024-02-01 bajaba TODO febrero (hallazgo P3 de la auditoría de
+    aceptación — rompía la reproducibilidad de rangos exactos).
+    """
     start = date.fromisoformat(start_date)
     end = date.fromisoformat(end_date)
     blocks = []
-    year, month = start.year, start.month
-    while (year, month) <= (end.year, end.month):
-        blocks.append((year, month))
-        year, month = (year, month + 1) if month < 12 else (year + 1, 1)
+    cursor = start
+    while cursor < end:
+        if cursor.month < 12:
+            inicio_mes_sig = date(cursor.year, cursor.month + 1, 1)
+        else:
+            inicio_mes_sig = date(cursor.year + 1, 1, 1)
+        hi = min(inicio_mes_sig, end)
+        blocks.append((cursor.isoformat(), hi.isoformat()))
+        cursor = hi
     return blocks
 
 
-def _fetch_block(dataset_id, col_fecha, year, month, base_filters, descripcion):
+def _fetch_block(dataset_id, col_fecha, lo, hi, base_filters, descripcion):
+    """Baja la ventana EXACTA [lo, hi) — hi exclusivo, ya recortada por month_blocks."""
     filters = list(base_filters)
-    next_year, next_month = (year, month + 1) if month < 12 else (year + 1, 1)
-    filters.append(f"{col_fecha} >= '{year}-{month:02d}-01T00:00:00.000'")
-    filters.append(f"{col_fecha} < '{next_year}-{next_month:02d}-01T00:00:00.000'")
+    filters.append(f"{col_fecha} >= '{lo}T00:00:00.000'")
+    filters.append(f"{col_fecha} < '{hi}T00:00:00.000'")
     where = " AND ".join(filters)
 
     rows, offset = [], 0
     while True:
         data = intentar(
             lambda: CLIENT.get(dataset_id, where=where, limit=LIMIT, offset=offset, order=":id"),
-            f"{descripcion} {year}-{month:02d} offset={offset}",
+            f"{descripcion} {lo} offset={offset}",
         )
         if data is None:
-            raise SocrataError(f"{descripcion} {year}-{month:02d}")
+            raise SocrataError(f"{descripcion} {lo}")
         rows.extend(data)
         if len(data) < LIMIT:
             return rows
         offset += LIMIT
 
 
-def _fetch_block_fast(dataset_id, col_fecha, year, month, where_deptos, descripcion):
+def _fetch_block_fast(dataset_id, col_fecha, lo, hi, where_deptos, descripcion):
     """Motor 'rapido': /resource (filtra de verdad) + gzip + archivo temporal.
 
+    Baja la ventana EXACTA [lo, hi) — hi exclusivo, recortada por month_blocks.
     Hallazgos verificados (jun-2026): gzip en transito funciona aunque no este
     documentado (requests lo negocia solo); descargar a archivo con lectura
     continua evita los cortes del streaming entrelazado. OJO: el export
     rows.csv IGNORA $where (devuelve todo) -> se usa /resource, que exige
     $limit explicito. Devuelve un DataFrame en formato SODA normalizado.
     """
-    next_year, next_month = (year, month + 1) if month < 12 else (year + 1, 1)
     where = (
-        f"{where_deptos} AND {col_fecha} >= '{year}-{month:02d}-01T00:00:00.000' "
-        f"AND {col_fecha} < '{next_year}-{next_month:02d}-01T00:00:00.000'"
+        f"{where_deptos} AND {col_fecha} >= '{lo}T00:00:00.000' "
+        f"AND {col_fecha} < '{hi}T00:00:00.000'"
     )
     domain = DOMAIN if DOMAIN.startswith("http") else f"https://{DOMAIN}"
     headers = {"X-App-Token": APP_TOKEN} if APP_TOKEN else {}
@@ -179,9 +190,9 @@ def _fetch_block_fast(dataset_id, col_fecha, year, month, where_deptos, descripc
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    df = intentar(_bajar, f"{descripcion} {year}-{month:02d} (rapido)")
+    df = intentar(_bajar, f"{descripcion} {lo} (rapido)")
     if df is None:
-        raise SocrataError(f"{descripcion} {year}-{month:02d}")
+        raise SocrataError(f"{descripcion} {lo}")
     return df
 
 
@@ -247,9 +258,9 @@ def download(
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 worker = _fetch_block_fast if engine == "rapido" else _fetch_block
                 futures = [
-                    pool.submit(worker, dataset_id, col_fecha, y, m,
+                    pool.submit(worker, dataset_id, col_fecha, lo, hi,
                                 where_deptos if engine == "rapido" else [where_deptos], nombre)
-                    for y, m in blocks
+                    for lo, hi in blocks
                 ]
                 for future in as_completed(futures):
                     resultado = future.result()
