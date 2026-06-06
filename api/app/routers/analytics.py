@@ -2,14 +2,33 @@
 filtros lo permiten (dataset/departamento/municipio/estación) y la hypertable
 cruda cuando hay filtros finos (zona, nombre de estación)."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..catalog import DATASETS
 from ..db import pool
 from ..models import QueryPayload, TimeseriesPayload
 from ..normalize import build_filters, department_variants, validate_required_departments
+from ..ratelimit import check_rate_limit
+from ..settings import settings
 
-router = APIRouter(prefix="/api/analytics")
+
+def _client_ip(request: Request):
+    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
+
+
+def analytics_rate(request: Request):
+    """Dependencia a nivel de router: limita TODAS las rutas de analítica."""
+    ok, _remaining, retry = check_rate_limit(
+        "lectura", _client_ip(request), settings.rate_limit_catalog_per_hour
+    )
+    if not ok:
+        raise HTTPException(
+            429,
+            f"Limite de consultas alcanzado. Intenta de nuevo en {max(retry // 60, 1)} minuto(s).",
+        )
+
+
+router = APIRouter(prefix="/api/analytics", dependencies=[Depends(analytics_rate)])
 
 _INTERVALS = {"day": "1 day", "month": "1 month", "year": "1 year"}
 _METRICS_CAGG = {

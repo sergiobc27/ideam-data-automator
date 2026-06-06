@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 
 from ..catalog import CATALOG_FILTERS_BY_KEY
-from ..db import check_rate_limit, pool
+from ..db import pool
+from ..ratelimit import check_rate_limit
 from ..models import CatalogBundlePayload, CatalogOptionsPayload, QueryPayload
 from ..normalize import (
     build_filters,

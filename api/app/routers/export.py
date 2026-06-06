@@ -8,9 +8,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from psycopg.types.json import Jsonb
 
-from ..db import check_rate_limit, pool
+from ..db import pool
 from ..models import CreateJobPayload, ExportPagePayload, QueryPayload
 from ..normalize import build_filters, normalize_label
+from ..ratelimit import check_rate_limit
 from ..services import exporter
 from ..settings import settings
 
@@ -21,14 +22,39 @@ def _client_ip(request: Request):
     return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
 
 
+def _export_rate(request: Request):
+    ok, _remaining, retry = check_rate_limit(
+        "export", _client_ip(request), settings.rate_limit_export_per_hour
+    )
+    if not ok:
+        raise HTTPException(
+            429,
+            f"Limite de exportaciones alcanzado. Intenta de nuevo en {max(retry // 60, 1)} minuto(s).",
+        )
+
+
+def _enforce_row_cap(row_count):
+    """Candado anti-DoS/costo: rechaza exports gigantes ANTES de generar."""
+    if row_count > settings.export_max_rows:
+        raise HTTPException(
+            413,
+            f"La consulta selecciona {row_count:,} filas y supera el limite de "
+            f"{settings.export_max_rows:,} filas por exportacion. Acota el rango de "
+            "fechas, los departamentos o las estaciones e intenta de nuevo.".replace(",", "."),
+        )
+
+
 @router.post("/api/export-plan")
-def export_plan(payload: QueryPayload):
+def export_plan(payload: QueryPayload, request: Request):
+    _export_rate(request)
     t0 = time.time()
     where, params, dataset, canonicals = build_filters(payload)
     with pool.connection() as conn:
         row_count = conn.execute(
             f"SELECT count(*) FROM observaciones WHERE {where}", params
         ).fetchone()[0]
+
+    _enforce_row_cap(row_count)
 
     page_size = settings.export_page_size
     total_pages = max(math.ceil(row_count / page_size), 1) if row_count else 0
@@ -144,16 +170,16 @@ _JOB_SELECT = (
 
 @router.post("/api/jobs", status_code=202)
 def create_job(payload: CreateJobPayload, request: Request):
-    ok, _remaining, retry = check_rate_limit(
-        "export", _client_ip(request), settings.rate_limit_export_per_hour
-    )
-    if not ok:
-        raise HTTPException(
-            429,
-            f"Limite de exportaciones alcanzado. Intenta de nuevo en {max(retry // 60, 1)} minuto(s).",
-        )
+    _export_rate(request)
 
-    _where, _params, dataset, _canonicals = build_filters(payload)
+    where, params, dataset, _canonicals = build_filters(payload)
+    # Candado anti-DoS/costo: estima filas y rechaza ANTES de encolar el job.
+    with pool.connection() as conn:
+        row_count = conn.execute(
+            f"SELECT count(*) FROM observaciones WHERE {where}", params
+        ).fetchone()[0]
+    _enforce_row_cap(row_count)
+
     selected = [f for f in (payload.formats or []) if f in exporter.VALID_FORMATS]
     effective = selected or ["csv"]
 

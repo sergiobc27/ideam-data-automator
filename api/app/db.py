@@ -30,7 +30,14 @@ RETURNING hits, window_start
 
 
 def check_rate_limit(scope, ip, limit, window_seconds=3600):
-    """Devuelve (permitido, restantes, retry_after_seconds)."""
+    """Limitador basado en Postgres (DEPRECADO).
+
+    Los routers ahora usan ``app.ratelimit.check_rate_limit`` (en memoria, sin
+    golpear la DB). Se conserva aquí por compatibilidad/datos históricos en la
+    tabla api_rate_limit, pero no se usa en el flujo de requests.
+
+    Devuelve (permitido, restantes, retry_after_seconds).
+    """
     with pool.connection() as conn:
         row = conn.execute(
             _RATE_SQL, {"scope": scope, "ip": ip, "window": f"{window_seconds} seconds"}

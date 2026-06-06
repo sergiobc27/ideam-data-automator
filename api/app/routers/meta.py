@@ -25,7 +25,7 @@ def meta():
         "departments": sorted(DEPARTMENT_MAP.keys()),
         "previewLimit": settings.preview_limit,
         "exportPageSize": settings.export_page_size,
-        "maxExportRows": None,
+        "maxExportRows": settings.export_max_rows,
         "catalogFilters": CATALOG_FILTERS,
     }
 

@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     rate_limit_export_per_hour: int = 30
     rate_limit_catalog_per_hour: int = 600
 
+    # Candados anti-DoS / anti-costo del export.
+    # EXPORT_MAX_ROWS: tope de filas estimadas antes de generar (rechazo 413).
+    # EXPORT_MAX_BYTES: tope del ZIP en disco; el job se aborta si lo supera (2 GB).
+    export_max_rows: int = 5_000_000
+    export_max_bytes: int = 2_000_000_000
+
     class Config:
         env_prefix = ""
         extra = "ignore"
