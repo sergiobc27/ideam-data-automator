@@ -6,7 +6,16 @@ from psycopg_pool import ConnectionPool
 
 from .settings import settings
 
-pool = ConnectionPool(settings.database_url, min_size=1, max_size=8, open=False)
+# statement_timeout: ninguna consulta de la API puede correr mas de 30s.
+# Sin esto, un resumen pesado sobre la hypertable de 764M filas se quedaba
+# minutos bloqueando workers de uvicorn (visto en produccion el 2026-06-06).
+pool = ConnectionPool(
+    settings.database_url,
+    min_size=1,
+    max_size=8,
+    open=False,
+    kwargs={"options": "-c statement_timeout=30000"},
+)
 
 _SCHEMA_API = Path(__file__).with_name("schema_api.sql").read_text(encoding="utf-8")
 
