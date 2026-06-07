@@ -12,10 +12,11 @@ from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..catalog import DATASETS
 from ..db import pool
 from ..models import QueryPayload, TimeseriesPayload
-from ..normalize import build_filters, department_variants, validate_required_departments
+from ..normalize import build_filters
 from ..ratelimit import check_rate_limit
 from ..settings import settings
 
@@ -61,43 +62,8 @@ def _bucket_date(value):
     return value.astimezone(timezone.utc).date()
 
 
-def _can_use_cagg(payload):
-    filters = payload.catalogFilters or {}
-    return not filters.get("hydrologicZones") and not filters.get("stationNames")
-
-
-def _cagg_filters(payload, time_col="dia"):
-    """WHERE/params equivalentes a build_filters pero sobre un cagg
-    (obs_diario con time_col='dia', obs_mensual con time_col='mes').
-    Sin departamentos = todo el país (permitido solo en analítica)."""
-    from ..normalize import expand_station_codes, get_dataset
-
-    dataset = get_dataset(payload.datasetId)
-    clauses = ["source_dataset_id = %(dataset_id)s"]
-    params = {"dataset_id": dataset["id"]}
-
-    if payload.departments:
-        canonicals = validate_required_departments(payload.departments)
-        variants = set()
-        for canonical in canonicals:
-            variants.update(department_variants(canonical))
-        clauses.append("upper(departamento) = ANY(%(departments)s)")
-        params["departments"] = sorted(variants)
-
-    filters = payload.catalogFilters or {}
-    if filters.get("municipalities"):
-        clauses.append("upper(municipio) = ANY(%(municipios)s)")
-        params["municipios"] = [str(m).upper() for m in filters["municipalities"]]
-    if filters.get("stations"):
-        clauses.append("codigoestacion = ANY(%(estaciones)s)")
-        params["estaciones"] = expand_station_codes(filters["stations"])
-    if payload.startDate:
-        clauses.append(f"{time_col} >= %(start)s")
-        params["start"] = payload.startDate
-    if payload.endDate:
-        clauses.append(f"{time_col} <= %(end)s")
-        params["end"] = payload.endDate
-    return " AND ".join(clauses), params, dataset
+# _can_use_cagg / _cagg_filters viven en app.caggs (compartidos con export);
+# los alias del import preservan los nombres históricos de este módulo.
 
 
 @router.post("/timeseries")

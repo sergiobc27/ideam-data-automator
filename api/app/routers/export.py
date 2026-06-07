@@ -13,6 +13,7 @@ from ..models import CreateJobPayload, ExportPagePayload, QueryPayload
 from ..normalize import build_filters, normalize_label
 from ..ratelimit import check_rate_limit
 from ..services import exporter
+from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..settings import settings
 
 router = APIRouter()
@@ -44,16 +45,40 @@ def _enforce_row_cap(row_count):
         )
 
 
+def _estimate_row_count(payload):
+    """Filas estimadas para el candado anti-costo y la planificación.
+
+    El count(*) directo sobre la hypertable cruda supera el statement_timeout
+    de 30s con selecciones grandes (p.ej. un departamento de precipitación con
+    todo el rango) y tumbaba /api/jobs con 500. Cuando los filtros lo permiten
+    se suma obs_diario (instantáneo; puede variar ±1 día en los bordes, lo cual
+    es irrelevante para el tope de 5M). Con filtros finos (zona, nombre de
+    estación) cae a la cruda con un timeout más holgado SOLO en esa transacción.
+    El conteo exacto definitivo lo recalcula el worker del job en background.
+    """
+    if _can_use_cagg(payload):
+        where, params, _dataset = _cagg_filters(payload)
+        with pool.connection() as conn:
+            value = conn.execute(
+                f"SELECT coalesce(sum(n), 0) FROM obs_diario WHERE {where}", params
+            ).fetchone()[0]
+        return int(value)
+    where, params, _dataset, _canonicals = build_filters(payload)
+    with pool.connection() as conn:
+        # 85s: por debajo del techo (~100s) del Worker de Cloudflare, para que
+        # el usuario reciba el error de la API y no un 524 opaco del proxy.
+        conn.execute("SET LOCAL statement_timeout = '85s'")
+        return conn.execute(
+            f"SELECT count(*) FROM observaciones WHERE {where}", params
+        ).fetchone()[0]
+
+
 @router.post("/api/export-plan")
 def export_plan(payload: QueryPayload, request: Request):
     _export_rate(request)
     t0 = time.time()
-    where, params, dataset, canonicals = build_filters(payload)
-    with pool.connection() as conn:
-        row_count = conn.execute(
-            f"SELECT count(*) FROM observaciones WHERE {where}", params
-        ).fetchone()[0]
-
+    _where, _params, dataset, canonicals = build_filters(payload)
+    row_count = _estimate_row_count(payload)
     _enforce_row_cap(row_count)
 
     page_size = settings.export_page_size
@@ -76,7 +101,16 @@ def export_plan(payload: QueryPayload, request: Request):
 
 
 @router.post("/api/export-page")
-def export_page(payload: ExportPagePayload):
+def export_page(payload: ExportPagePayload, request: Request):
+    # Mismas guardias que el resto del flujo de export: sin esto era una
+    # puerta lateral sin rate limit ni candado de filas (hallazgo de auditoría).
+    _export_rate(request)
+    if payload.offset >= settings.export_max_rows:
+        raise HTTPException(
+            413,
+            f"El offset supera el limite de {settings.export_max_rows:,} filas "
+            "por exportacion.".replace(",", "."),
+        )
     # El `where` del cliente se ignora: los filtros se reconstruyen server-side.
     base = QueryPayload(
         datasetId=payload.datasetId,
@@ -89,6 +123,9 @@ def export_page(payload: ExportPagePayload):
     limit = min(max(payload.limit, 1), settings.export_page_size)
     cols = ", ".join(exporter.ROW_COLUMNS)
     with pool.connection() as conn:
+        # OFFSET profundo es costoso en la cruda; timeout holgado solo aquí,
+        # por debajo del techo (~100s) del Worker de Cloudflare.
+        conn.execute("SET LOCAL statement_timeout = '85s'")
         rows = conn.execute(
             f"SELECT {cols} FROM observaciones WHERE {where} "
             "ORDER BY fechaobservacion DESC OFFSET %(offset)s LIMIT %(page_limit)s",
@@ -172,12 +209,23 @@ _JOB_SELECT = (
 def create_job(payload: CreateJobPayload, request: Request):
     _export_rate(request)
 
-    where, params, dataset, _canonicals = build_filters(payload)
-    # Candado anti-DoS/costo: estima filas y rechaza ANTES de encolar el job.
+    # Tope GLOBAL de exportaciones simultáneas: la cola del executor es
+    # ilimitada y cada job retiene conexión/CPU/disco; sin esto, N IPs
+    # podían encolar trabajo sin límite (hallazgo de auditoría).
     with pool.connection() as conn:
-        row_count = conn.execute(
-            f"SELECT count(*) FROM observaciones WHERE {where}", params
+        active = conn.execute(
+            "SELECT count(*) FROM export_jobs WHERE status IN ('queued', 'planning', 'processing')"
         ).fetchone()[0]
+    if active >= settings.export_max_active_jobs:
+        raise HTTPException(
+            429,
+            "El servidor esta procesando el maximo de exportaciones simultaneas. "
+            "Intenta de nuevo en unos minutos.",
+        )
+
+    _where, _params, dataset, _canonicals = build_filters(payload)
+    # Candado anti-DoS/costo: estima filas y rechaza ANTES de encolar el job.
+    row_count = _estimate_row_count(payload)
     _enforce_row_cap(row_count)
 
     selected = [f for f in (payload.formats or []) if f in exporter.VALID_FORMATS]

@@ -4,12 +4,16 @@ After=docker.service network-online.target
 Wants=network-online.target
 
 [Service]
-User=root
+# Usuario sin privilegios (hardening 2026-06-06): dueño de /var/lib/ideam-api.
+User=ideam-api
+NoNewPrivileges=yes
+PrivateTmp=yes
 EnvironmentFile=/etc/ideam/ideam.env
 WorkingDirectory=/opt/ideam/api
 ExecStart=/opt/ideam/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target

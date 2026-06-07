@@ -14,6 +14,7 @@ import csv
 import json
 import logging
 import shutil
+import threading
 import time
 import unicodedata
 import zipfile
@@ -26,9 +27,16 @@ import pyarrow.parquet as pq
 from psycopg.rows import tuple_row
 from psycopg.types.json import Jsonb
 
+from ..caggs import cagg_filters, can_use_cagg
 from ..db import pool
 from ..models import QueryPayload
-from ..normalize import build_filters
+from ..normalize import (
+    build_filters,
+    department_variants,
+    expand_station_codes,
+    get_dataset,
+    validate_required_departments,
+)
 from ..settings import settings
 
 logger = logging.getLogger(__name__)
@@ -181,6 +189,86 @@ def submit_job(job_id):
     EXECUTOR.submit(_run_job_safe, str(job_id))
 
 
+# --- Reconciliación de jobs huérfanos (hallazgo de auditoría) -----------------
+# El EXECUTOR vive en memoria de UN proceso uvicorn: tras un deploy/crash, los
+# jobs 'queued' jamás corren y los 'planning'/'processing' quedan colgados para
+# siempre (spinner infinito en el front).
+
+_RECONCILER_STARTED = threading.Event()
+
+_STALE_SQL = (
+    "UPDATE export_jobs SET status = 'failed', "
+    "error = 'La exportacion se interrumpio por un reinicio del servidor. Genera una nueva.', "
+    "finished_at = now(), updated_at = now(), current_stage = 'Fallido' "
+    "WHERE status IN ('planning', 'processing') "
+    "AND updated_at < now() - interval '20 minutes'"
+)
+
+
+def reconcile_on_startup():
+    """Reencola los jobs 'queued' de un proceso anterior. El claim atómico de
+    _run_job evita la doble ejecución aunque ambos workers de uvicorn (o un
+    worker y el proceso viejo) reencolen el mismo job."""
+    try:
+        with pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT job_id FROM export_jobs WHERE status = 'queued'"
+            ).fetchall()
+        for (job_id,) in rows:
+            submit_job(job_id)
+        if rows:
+            logger.info("Reencolados %s export jobs 'queued' tras reinicio", len(rows))
+    except Exception:  # noqa: BLE001 - no impedir el arranque de la API
+        logger.exception("No se pudieron reencolar jobs pendientes")
+
+
+def start_reconciler():
+    """Barrido periódico (1/min) de jobs huérfanos. 20 min de gracia: un job
+    vivo refresca updated_at constantemente; el peor caso legítimo es el sort
+    inicial de un grupo grande (statement_timeout 900s)."""
+    if _RECONCILER_STARTED.is_set():
+        return
+    _RECONCILER_STARTED.set()
+    threading.Thread(target=_reconcile_loop, name="export-reconciler", daemon=True).start()
+
+
+def _reconcile_loop():
+    while True:
+        time.sleep(60)
+        try:
+            with pool.connection() as conn:
+                conn.execute(_STALE_SQL)
+        except Exception:  # noqa: BLE001
+            logger.exception("Barrido de jobs huérfanos falló")
+
+
+def _catalog_where(payload):
+    """WHERE/params sobre mv_catalogo con TODOS los filtros del payload (la
+    vista tiene depto/municipio/zona/estación/nombre y los códigos coinciden
+    EXACTO con la cruda porque se deriva de observaciones)."""
+    dataset = get_dataset(payload.datasetId)
+    canonicals = validate_required_departments(payload.departments)
+    variants = set()
+    for canonical in canonicals:
+        variants.update(department_variants(canonical))
+    clauses = ["source_dataset_id = %(dataset_id)s", "upper(departamento) = ANY(%(deps)s)"]
+    params = {"dataset_id": dataset["id"], "deps": sorted(variants)}
+    filters = payload.catalogFilters or {}
+    if filters.get("municipalities"):
+        clauses.append("upper(municipio) = ANY(%(municipios)s)")
+        params["municipios"] = [str(m).upper() for m in filters["municipalities"]]
+    if filters.get("hydrologicZones"):
+        clauses.append("upper(zonahidrografica) = ANY(%(zonas)s)")
+        params["zonas"] = [str(z).upper() for z in filters["hydrologicZones"]]
+    if filters.get("stations"):
+        clauses.append("codigoestacion = ANY(%(estaciones)s)")
+        params["estaciones"] = expand_station_codes(filters["stations"])
+    if filters.get("stationNames"):
+        clauses.append("upper(nombreestacion) = ANY(%(nombres)s)")
+        params["nombres"] = [str(n).upper() for n in filters["stationNames"]]
+    return " AND ".join(clauses), params
+
+
 def _run_job_safe(job_id):
     try:
         _run_job(job_id)
@@ -192,28 +280,68 @@ def _run_job_safe(job_id):
 
 def _run_job(job_id):
     t0 = time.time()
+    # Claim ATÓMICO: solo el worker que mueva queued->planning ejecuta el job
+    # (evita doble corrida cuando ambos procesos uvicorn reencolan al arrancar).
     with pool.connection() as conn:
         job = conn.execute(
-            "SELECT payload, effective_formats, dataset_name FROM export_jobs WHERE job_id = %s",
+            "UPDATE export_jobs SET status = 'planning', started_at = now(), updated_at = now() "
+            "WHERE job_id = %s AND status = 'queued' "
+            "RETURNING payload, effective_formats, dataset_name",
             (job_id,),
         ).fetchone()
+    if not job:
+        return  # otro worker lo reclamó, o el job ya no está 'queued'
     payload_raw, formats, dataset_name = job
     payload = QueryPayload(**payload_raw)
     where, params, dataset, canonicals = build_filters(payload)
 
     now = datetime.now(timezone.utc)
     stem = file_stem(dataset_name, canonicals, now)
-    _update(job_id, status="planning", started_at=now, current_stage="Planificando", file_stem=stem)
+    _update(job_id, current_stage="Planificando", file_stem=stem)
+
+    # Planificación instantánea (hallazgo de auditoría): antes, count(*) +
+    # GROUP BY sobre la cruda = minutos de "Planificando" en selecciones
+    # grandes. El conteo sale del cagg y los grupos de mv_catalogo.
+    cat_where, cat_params = _catalog_where(payload)
+    with pool.connection() as conn:
+        if can_use_cagg(payload):
+            cwhere, cparams, _d = cagg_filters(payload)
+            row_count = int(conn.execute(
+                f"SELECT coalesce(sum(n), 0) FROM obs_diario WHERE {cwhere}", cparams
+            ).fetchone()[0])
+        else:
+            conn.execute("SET LOCAL statement_timeout = '900s'")
+            row_count = conn.execute(
+                f"SELECT count(*) FROM observaciones WHERE {where}", params
+            ).fetchone()[0]
+
+    # Reaplica el candado con el dato del planner: la estimación de /api/jobs
+    # pudo subestimar (hallazgo de auditoría: candado burlable).
+    if row_count > settings.export_max_rows:
+        raise ExportTooLargeError(
+            f"La consulta selecciona {row_count:,} filas y supera el limite de "
+            f"{settings.export_max_rows:,} filas por exportacion. Acota los "
+            "filtros e intenta de nuevo.".replace(",", ".")
+        )
 
     with pool.connection() as conn:
-        row_count = conn.execute(
-            f"SELECT count(*) FROM observaciones WHERE {where}", params
-        ).fetchone()[0]
         groups = conn.execute(
-            f"SELECT departamento, municipio FROM observaciones WHERE {where} "
+            f"SELECT departamento, municipio FROM mv_catalogo WHERE {cat_where} "
             "GROUP BY 1, 2 ORDER BY 1, 2",
-            params,
+            cat_params,
         ).fetchall()
+        # Poda de segmentos (hallazgo TOP de auditoría): la compresión está
+        # segmentada por (dataset, estación); filtrar por departamento solo
+        # descomprimía el dataset ENTERO (282M filas en precipitación). La
+        # lista de códigos del catálogo activa el segment pruning real.
+        seg = conn.execute(
+            f"SELECT DISTINCT codigoestacion FROM mv_catalogo WHERE {cat_where}",
+            cat_params,
+        ).fetchall()
+    seg_codes = [r[0] for r in seg if r[0] is not None]
+    if seg_codes:
+        where = f"{where} AND codigoestacion = ANY(%(_seg_codes)s)"
+        params = {**params, "_seg_codes": seg_codes}
 
     page_size = settings.export_page_size
     total_pages = max((row_count + page_size - 1) // page_size, 1)
@@ -227,6 +355,7 @@ def _run_job(job_id):
 
     cols = ", ".join(ROW_COLUMNS)
     processed = 0
+    last_progress = 0.0
     stations, municipios, zonas = set(), set(), set()
     observed_start = observed_end = None
 
@@ -245,6 +374,9 @@ def _run_job(job_id):
                     writers = _GroupWriters(workdir, dataset_name, dep, mun, now, formats)
                     with pool.connection() as conn:
                         conn.row_factory = tuple_row
+                        # El ORDER BY del grupo puede tardar >30s en grupos
+                        # grandes; tope holgado solo en esta transacción.
+                        conn.execute("SET LOCAL statement_timeout = '900s'")
                         with conn.cursor(name=f"exp_{job_id[:8]}") as cur:
                             cur.itersize = BATCH_SIZE
                             cur.execute(
@@ -260,6 +392,14 @@ def _run_job(job_id):
                                     break
                                 writers.write_batch(batch)
                                 processed += len(batch)
+                                # Candado exacto durante el stream: la estimación
+                                # del planner puede quedarse corta en los bordes.
+                                if processed > settings.export_max_rows:
+                                    raise ExportTooLargeError(
+                                        f"La exportacion supero el limite de "
+                                        f"{settings.export_max_rows:,} filas. Acota los "
+                                        "filtros e intenta de nuevo.".replace(",", ".")
+                                    )
                                 for row in batch:
                                     stations.add(row[1])
                                     if row[8] is not None:
@@ -268,13 +408,24 @@ def _run_job(job_id):
                                     if fecha is not None:
                                         observed_start = fecha if observed_start is None else min(observed_start, fecha)
                                         observed_end = fecha if observed_end is None else max(observed_end, fecha)
-                                _update(
-                                    job_id,
-                                    processed_rows=processed,
-                                    completed_pages=min(processed // page_size, total_pages),
-                                    current_stage=f"Procesando {dep or 'N/D'} / {mun or 'N/D'}",
-                                )
+                                # Throttle del progreso: antes era un UPDATE+commit
+                                # por cada batch de 50k (churn de pool y WAL).
+                                if time.time() - last_progress >= 2:
+                                    last_progress = time.time()
+                                    _update(
+                                        job_id,
+                                        processed_rows=processed,
+                                        completed_pages=min(processed // page_size, total_pages),
+                                        current_stage=f"Procesando {dep or 'N/D'} / {mun or 'N/D'}",
+                                    )
                     writers.close()
+                    if writers.rows == 0:
+                        # Grupo del catálogo sin filas en el rango pedido (los
+                        # grupos salen de mv_catalogo, que no conoce fechas):
+                        # no ensuciar el ZIP con archivos vacíos.
+                        for path in writers.paths.values():
+                            path.unlink(missing_ok=True)
+                        continue
                     if mun is not None:
                         municipios.add(mun)
                     for _fmt, path in writers.paths.items():

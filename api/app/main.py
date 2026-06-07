@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from .db import init_db, pool
 from .routers import analytics, catalog_routes, export, meta, preview
+from .services import exporter
 from .settings import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -32,6 +33,10 @@ async def lifespan(_app: FastAPI):
             "API_SHARED_SECRET no configurado: la API rechazará TODAS las "
             "solicitudes (fail-closed). Configura el secreto en /etc/ideam/ideam.env."
         )
+    # Jobs huérfanos de un proceso anterior: reencolar 'queued' (claim atómico
+    # evita doble corrida) y barrer 'processing' estancados cada minuto.
+    exporter.reconcile_on_startup()
+    exporter.start_reconciler()
     logger.info("API lista.")
     yield
     pool.close()

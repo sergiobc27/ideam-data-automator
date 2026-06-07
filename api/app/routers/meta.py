@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 
 from ..catalog import CATALOG_FILTERS, DATASETS, DEPARTMENT_MAP
 from ..db import pool
@@ -76,6 +77,48 @@ def date_range(datasetId: str):
         "cachedAt": datetime.now(timezone.utc).isoformat(),
         "cacheTtlSeconds": 0,
     }
+
+
+@router.get("/api/stations.geojson")
+def stations_geojson():
+    """Catálogo completo de estaciones como GeoJSON para el mapa.
+
+    ~18K features (≈0,5MB gzip). El catálogo cambia poco: cache de 24h en el
+    borde. El BETWEEN descarta outliers de captura fuera del territorio
+    colombiano (San Andrés incluido: lon hasta -82, lat hasta 14).
+    """
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT codigoestacion, nombre, categoria, tecnologia, estado, "
+            "departamento_norm, municipio, latitud, longitud, altitud, "
+            "zona_hidrografica, corriente, entidad "
+            "FROM estaciones "
+            "WHERE latitud BETWEEN -5 AND 14 AND longitud BETWEEN -82 AND -66"
+        ).fetchall()
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [r[8], r[7]]},
+            "properties": {
+                "codigo": r[0],
+                "nombre": r[1],
+                "categoria": r[2],
+                "tecnologia": r[3],
+                "estado": r[4],
+                "departamento": r[5],
+                "municipio": r[6],
+                "altitud": r[9],
+                "zonaHidrografica": r[10],
+                "corriente": r[11],
+                "entidad": r[12],
+            },
+        }
+        for r in rows
+    ]
+    return JSONResponse(
+        {"type": "FeatureCollection", "features": features},
+        headers={"cache-control": "public, max-age=86400, stale-while-revalidate=86400"},
+    )
 
 
 @router.get("/api/municipalities")

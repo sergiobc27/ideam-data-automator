@@ -18,8 +18,10 @@ class Settings(BaseSettings):
     # Candados anti-DoS / anti-costo del export.
     # EXPORT_MAX_ROWS: tope de filas estimadas antes de generar (rechazo 413).
     # EXPORT_MAX_BYTES: tope del ZIP en disco; el job se aborta si lo supera (2 GB).
+    # EXPORT_MAX_ACTIVE_JOBS: tope GLOBAL de jobs queued+planning+processing (429).
     export_max_rows: int = 5_000_000
     export_max_bytes: int = 2_000_000_000
+    export_max_active_jobs: int = 4
 
     class Config:
         env_prefix = ""
