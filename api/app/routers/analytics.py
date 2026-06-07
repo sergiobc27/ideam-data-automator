@@ -313,6 +313,151 @@ def return_periods(payload: QueryPayload):
     }
 
 
+_IDF_RETURN_PERIODS = (2, 5, 10, 25, 50, 100)
+
+
+def _gumbel_quantiles(maxima, return_periods):
+    """Ajuste Gumbel por método de momentos y cuantiles para cada Tr.
+    Devuelve (params, {Tr: valor}) o (None, {}) si n<5."""
+    n = len(maxima)
+    if n < 5:
+        return None, {}
+    mean = statistics.fmean(maxima)
+    std = statistics.stdev(maxima)
+    if std <= 0:
+        return None, {}
+    beta = std * math.sqrt(6) / math.pi
+    mu = mean - _EULER_MASCHERONI * beta
+    quantiles = {t: mu - beta * math.log(-math.log(1 - 1 / t)) for t in return_periods}
+    return {"mu": round(mu, 2), "beta": round(beta, 2)}, quantiles
+
+
+def _fit_idf_equation(samples):
+    """Ajusta I = K * T^m / D^n por mínimos cuadrados log-lineal (forma de
+    Vargas & Díaz-Granados, estándar en Colombia). samples: lista de
+    (Tr_años, D_min, I_mm_h). Regresión de log I = b0 + m*log T - n*log D
+    resuelta con ecuaciones normales 3x3 (sin dependencias externas).
+    Devuelve {K, m, n, r2} o None si no hay datos suficientes."""
+    pts = [(math.log(t), math.log(d), math.log(i)) for t, d, i in samples if i > 0 and t > 0 and d > 0]
+    if len(pts) < 6:
+        return None
+    # Diseño: y = b0 + b1*x1 + b2*x2 (x1=lnT, x2=lnD; n = -b2, m = b1).
+    n_obs = len(pts)
+    sx1 = sum(p[0] for p in pts); sx2 = sum(p[1] for p in pts); sy = sum(p[2] for p in pts)
+    sx1x1 = sum(p[0] * p[0] for p in pts); sx2x2 = sum(p[1] * p[1] for p in pts)
+    sx1x2 = sum(p[0] * p[1] for p in pts)
+    sx1y = sum(p[0] * p[2] for p in pts); sx2y = sum(p[1] * p[2] for p in pts)
+    # Sistema normal A·b = c con A 3x3 simétrica.
+    a = [[n_obs, sx1, sx2], [sx1, sx1x1, sx1x2], [sx2, sx1x2, sx2x2]]
+    c = [sy, sx1y, sx2y]
+    sol = _solve_3x3(a, c)
+    if sol is None:
+        return None
+    b0, b1, b2 = sol
+    # R² del ajuste en espacio log.
+    mean_y = sy / n_obs
+    ss_tot = sum((p[2] - mean_y) ** 2 for p in pts)
+    ss_res = sum((p[2] - (b0 + b1 * p[0] + b2 * p[1])) ** 2 for p in pts)
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+    return {"K": round(math.exp(b0), 3), "m": round(b1, 3), "n": round(-b2, 3), "r2": round(r2, 3)}
+
+
+def _solve_3x3(a, c):
+    """Eliminación de Gauss para un sistema 3x3. None si es singular."""
+    m = [row[:] + [c[i]] for i, row in enumerate(a)]
+    for col in range(3):
+        pivot = max(range(col, 3), key=lambda r: abs(m[r][col]))
+        if abs(m[pivot][col]) < 1e-12:
+            return None
+        m[col], m[pivot] = m[pivot], m[col]
+        for r in range(3):
+            if r != col:
+                factor = m[r][col] / m[col][col]
+                for k in range(col, 4):
+                    m[r][k] -= factor * m[col][k]
+    return [m[i][3] / m[i][i] for i in range(3)]
+
+
+@router.post("/idf")
+def idf(payload: QueryPayload):
+    """Curvas IDF (Intensidad-Duración-Frecuencia) REALES por estación.
+
+    Lee los máximos anuales móviles PRECOMPUTADOS (idf_max_anual; ventanas de
+    10/20/30/60/120/180/360/720/1440 min sobre los datos de 10-min del IDEAM),
+    ajusta Gumbel por momentos a cada duración y convierte a intensidad
+    (mm/h = lámina / (D/60)). Ajusta además la ecuación I = K·T^m/D^n
+    (Vargas & Díaz-Granados). Si la estación no está precomputada, lo indica.
+    """
+    _require_single_station(payload)
+    if payload.datasetId != _PRECIP_DATASET:
+        raise HTTPException(400, "Las curvas IDF aplican a precipitación.")
+    code = (payload.catalogFilters or {}).get("stations", [None])[0]
+
+    with pool.connection() as conn:
+        estado = conn.execute(
+            "SELECT anios_validos FROM idf_estado WHERE codigoestacion = %s",
+            (code,),
+        ).fetchone()
+        rows = conn.execute(
+            "SELECT dur_min, anio, max_mm FROM idf_max_anual "
+            "WHERE codigoestacion = %s ORDER BY dur_min, anio",
+            (code,),
+        ).fetchall()
+
+    if not rows:
+        return {
+            "available": False,
+            "message": (
+                "Esta estación aún no tiene curvas IDF precomputadas (puede no ser "
+                "pluviográfica o estar en cola de cálculo)."
+            ),
+            "durations": [], "returnPeriods": list(_IDF_RETURN_PERIODS), "curves": [],
+            "equation": None, "warnings": [],
+        }
+
+    by_duration = {}
+    for dur, _anio, value in rows:
+        by_duration.setdefault(dur, []).append(float(value))
+
+    durations = sorted(by_duration)
+    n_years = estado[0] if estado else max((len(v) for v in by_duration.values()), default=0)
+    warnings = []
+    if n_years < 15:
+        warnings.append(f"Registro corto ({n_years} años): IDF de baja confianza, evita extrapolar a Tr altos.")
+    elif n_years < 25:
+        warnings.append(f"{n_years} años de registro: usa con cautela los Tr de 50-100 años.")
+
+    curves = []
+    fit_samples = []
+    for tr in _IDF_RETURN_PERIODS:
+        points = []
+        for dur in durations:
+            _params, quantiles = _gumbel_quantiles(by_duration[dur], (tr,))
+            depth = quantiles.get(tr)
+            if depth is None or depth < 0:
+                continue
+            intensity = depth / (dur / 60.0)  # mm/h
+            points.append({"durMin": dur, "depthMm": round(depth, 1), "intensityMmH": round(intensity, 1)})
+            fit_samples.append((tr, dur, intensity))
+        if points:
+            curves.append({"returnPeriod": tr, "points": points})
+
+    return {
+        "available": True,
+        "datasetId": payload.datasetId,
+        "nYears": n_years,
+        "durations": durations,
+        "returnPeriods": list(_IDF_RETURN_PERIODS),
+        "curves": curves,
+        "equation": _fit_idf_equation(fit_samples),
+        "warnings": warnings,
+        "method": (
+            "Máximos anuales móviles por duración (datos 10-min) + Gumbel por momentos; "
+            "ecuación I=K·T^m/D^n por mínimos cuadrados log-lineal"
+        ),
+    }
+
+
 _SPI_CATEGORIES = [
     (-2.0, "Sequía extrema"),
     (-1.5, "Sequía severa"),
