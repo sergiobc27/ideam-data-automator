@@ -354,12 +354,18 @@ def _fit_idf_equation(samples):
     if sol is None:
         return None
     b0, b1, b2 = sol
-    # R² del ajuste en espacio log.
+    # R² del ajuste en ESPACIO LOG (no es la bondad en mm/h; rotularlo así en la
+    # UI — auditoría #5 #3).
     mean_y = sy / n_obs
     ss_tot = sum((p[2] - mean_y) ** 2 for p in pts)
     ss_res = sum((p[2] - (b0 + b1 * p[0] + b2 * p[1])) ** 2 for p in pts)
     r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
-    return {"K": round(math.exp(b0), 3), "m": round(b1, 3), "n": round(-b2, 3), "r2": round(r2, 3)}
+    K, m, n, r2log = math.exp(b0), b1, -b2, r2
+    # Un ajuste degenerado puede dar inf/nan -> el token JSON `Infinity`/`NaN`
+    # rompe response.json() en el navegador (auditoría #5 #6). Devolver None.
+    if not all(math.isfinite(v) for v in (K, m, n, r2log)):
+        return None
+    return {"K": round(K, 3), "m": round(m, 3), "n": round(n, 3), "r2": round(r2log, 3), "r2Space": "log"}
 
 
 def _solve_3x3(a, c):
@@ -388,20 +394,26 @@ def idf(payload: QueryPayload):
     (mm/h = lámina / (D/60)). Ajusta además la ecuación I = K·T^m/D^n
     (Vargas & Díaz-Granados). Si la estación no está precomputada, lo indica.
     """
+    from ..normalize import expand_station_codes
+
     _require_single_station(payload)
     if payload.datasetId != _PRECIP_DATASET:
         raise HTTPException(400, "Las curvas IDF aplican a precipitación.")
     code = (payload.catalogFilters or {}).get("stations", [None])[0]
+    # Expandir el código (ceros a la izquierda) y match por ANY, igual que el
+    # resto de endpoints: sin esto, estaciones con formato distinto entre la
+    # tabla IDF y la de estaciones daban falso "no precomputada" (auditoría #5 #1).
+    codes = expand_station_codes([code]) if code else []
 
     with pool.connection() as conn:
         estado = conn.execute(
-            "SELECT anios_validos FROM idf_estado WHERE codigoestacion = %s",
-            (code,),
+            "SELECT anios_validos FROM idf_estado WHERE codigoestacion = ANY(%s)",
+            (codes,),
         ).fetchone()
         rows = conn.execute(
             "SELECT dur_min, anio, max_mm FROM idf_max_anual "
-            "WHERE codigoestacion = %s ORDER BY dur_min, anio",
-            (code,),
+            "WHERE codigoestacion = ANY(%s) ORDER BY dur_min, anio",
+            (codes,),
         ).fetchall()
 
     if not rows:
@@ -441,6 +453,20 @@ def idf(payload: QueryPayload):
             fit_samples.append((tr, dur, intensity))
         if points:
             curves.append({"returnPeriod": tr, "points": points})
+
+    # Hay filas precomputadas pero <5 años válidos → Gumbel no ajusta y no hay
+    # curvas: NO es "disponible", es registro insuficiente (auditoría #5 — evita
+    # mostrar "disponible" con gráfico vacío).
+    if not curves:
+        return {
+            "available": False,
+            "message": (
+                f"Registro insuficiente para IDF ({n_years} año(s) completo(s); "
+                "se requieren al menos 5)."
+            ),
+            "durations": durations, "returnPeriods": list(_IDF_RETURN_PERIODS),
+            "curves": [], "equation": None, "nYears": n_years, "warnings": warnings,
+        }
 
     return {
         "available": True,

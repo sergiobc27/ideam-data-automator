@@ -31,11 +31,18 @@ CREATE TABLE IF NOT EXISTS idf_estado (
 -- Devuelve el número de años válidos insertados. Idempotente: borra y reinserta.
 -- Un año es "válido" si tiene >= p_min_obs observaciones (un año completo a
 -- 10 min son ~52.560; el umbral por defecto ~la mitad cubre la temporada).
-CREATE OR REPLACE FUNCTION idf_compute_station(p_codigo text, p_min_obs int DEFAULT 25000)
+-- p_min_obs 30000 ≈ 57% de un año a 10 min (52.560): balance entre rigor (más
+-- que el 48% original que la auditoría objetó) y cobertura de la red (el 76%
+-- dejaba sin años válidos al grueso de estaciones del IDEAM, que tienen huecos
+-- frecuentes). Cota superior física de 60 mm/10min descarta picos/centinelas
+-- (#5). Rejilla densa + ROWS = exactitud temporal sin el sesgo de huecos del
+-- lado inseguro (#2). Lock por estación evita choques batch+refresh (#8).
+CREATE OR REPLACE FUNCTION idf_compute_station(p_codigo text, p_min_obs int DEFAULT 30000)
 RETURNS int AS $$
 DECLARE
     v_anios int;
 BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext('idf:' || p_codigo));
     DELETE FROM idf_max_anual WHERE codigoestacion = p_codigo;
 
     INSERT INTO idf_max_anual (codigoestacion, anio, dur_min, max_mm)
@@ -45,38 +52,52 @@ BEGIN
                max(d10)   AS m10,   max(d20)   AS m20,   max(d30)   AS m30,
                max(d60)   AS m60,   max(d120)  AS m120,  max(d180)  AS m180,
                max(d360)  AS m360,  max(d720)  AS m720,  max(d1440) AS m1440,
-               count(*)   AS n_obs
+               sum(es_real::int) AS n_obs        -- observaciones REALES del año
         FROM (
-            SELECT extract(year FROM (fechaobservacion AT TIME ZONE 'UTC'))::int AS anio,
-                   sum(valorobservado) OVER w10   AS d10,
-                   sum(valorobservado) OVER w20   AS d20,
-                   sum(valorobservado) OVER w30   AS d30,
-                   sum(valorobservado) OVER w60   AS d60,
-                   sum(valorobservado) OVER w120  AS d120,
-                   sum(valorobservado) OVER w180  AS d180,
-                   sum(valorobservado) OVER w360  AS d360,
-                   sum(valorobservado) OVER w720  AS d720,
-                   sum(valorobservado) OVER w1440 AS d1440
-            FROM observaciones
-            WHERE source_dataset_id = 's54a-sgyg'
-              AND codigoestacion = p_codigo
-              AND valorobservado >= 0           -- saneo: descarta centinelas negativos
-            -- Ventanas por NÚMERO DE INTERVALOS de 10 min (ROWS), no por tiempo
-            -- (RANGE): PG calcula ROWS con suma deslizante incremental O(filas),
-            -- ~constante sin importar la duración; RANGE temporal era O(filas ×
-            -- tamaño_ventana) y reventaba en estaciones grandes. Para datos
-            -- regulares de 10 min es equivalente (método estándar en análisis de
-            -- pluviógrafos: máximo móvil de N intervalos). dur_min = N × 10.
+            SELECT extract(year FROM (slot AT TIME ZONE 'UTC'))::int AS anio,
+                   sum(val) OVER w10   AS d10,
+                   sum(val) OVER w20   AS d20,
+                   sum(val) OVER w30   AS d30,
+                   sum(val) OVER w60   AS d60,
+                   sum(val) OVER w120  AS d120,
+                   sum(val) OVER w180  AS d180,
+                   sum(val) OVER w360  AS d360,
+                   sum(val) OVER w720  AS d720,
+                   sum(val) OVER w1440 AS d1440,
+                   es_real
+            -- Rejilla DENSA de 10 min (huecos = 0): hace que las ventanas ROWS
+            -- de N intervalos cubran exactamente N×10 min de tiempo real, sin
+            -- saltar huecos. Combina la exactitud temporal de RANGE con la
+            -- velocidad O(filas) de ROWS (RANGE puro tardaba 6min/estación
+            -- grande). Huecos cuentan como 0 → del lado SEGURO de diseño
+            -- (nunca sobreestima). Corrige auditoría #5 #2.
+            FROM (
+                WITH obs AS (
+                    SELECT date_bin('10 min', fechaobservacion, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS slot,
+                           sum(valorobservado) AS val
+                    FROM observaciones
+                    WHERE source_dataset_id = 's54a-sgyg'
+                      AND codigoestacion = p_codigo
+                      AND valorobservado >= 0 AND valorobservado <= 60  -- saneo: sin negativos ni picos no físicos
+                    GROUP BY 1
+                ), rango AS (SELECT min(slot) AS t0, max(slot) AS t1 FROM obs)
+                SELECT g.slot,
+                       coalesce(o.val, 0)::real AS val,
+                       (o.val IS NOT NULL) AS es_real
+                FROM rango,
+                     LATERAL generate_series(rango.t0, rango.t1, INTERVAL '10 min') AS g(slot)
+                LEFT JOIN obs o ON o.slot = g.slot
+            ) grid
             WINDOW
-              w10   AS (ORDER BY fechaobservacion ROWS BETWEEN 0   PRECEDING AND CURRENT ROW),
-              w20   AS (ORDER BY fechaobservacion ROWS BETWEEN 1   PRECEDING AND CURRENT ROW),
-              w30   AS (ORDER BY fechaobservacion ROWS BETWEEN 2   PRECEDING AND CURRENT ROW),
-              w60   AS (ORDER BY fechaobservacion ROWS BETWEEN 5   PRECEDING AND CURRENT ROW),
-              w120  AS (ORDER BY fechaobservacion ROWS BETWEEN 11  PRECEDING AND CURRENT ROW),
-              w180  AS (ORDER BY fechaobservacion ROWS BETWEEN 17  PRECEDING AND CURRENT ROW),
-              w360  AS (ORDER BY fechaobservacion ROWS BETWEEN 35  PRECEDING AND CURRENT ROW),
-              w720  AS (ORDER BY fechaobservacion ROWS BETWEEN 71  PRECEDING AND CURRENT ROW),
-              w1440 AS (ORDER BY fechaobservacion ROWS BETWEEN 143 PRECEDING AND CURRENT ROW)
+              w10   AS (ORDER BY slot ROWS BETWEEN 0   PRECEDING AND CURRENT ROW),
+              w20   AS (ORDER BY slot ROWS BETWEEN 1   PRECEDING AND CURRENT ROW),
+              w30   AS (ORDER BY slot ROWS BETWEEN 2   PRECEDING AND CURRENT ROW),
+              w60   AS (ORDER BY slot ROWS BETWEEN 5   PRECEDING AND CURRENT ROW),
+              w120  AS (ORDER BY slot ROWS BETWEEN 11  PRECEDING AND CURRENT ROW),
+              w180  AS (ORDER BY slot ROWS BETWEEN 17  PRECEDING AND CURRENT ROW),
+              w360  AS (ORDER BY slot ROWS BETWEEN 35  PRECEDING AND CURRENT ROW),
+              w720  AS (ORDER BY slot ROWS BETWEEN 71  PRECEDING AND CURRENT ROW),
+              w1440 AS (ORDER BY slot ROWS BETWEEN 143 PRECEDING AND CURRENT ROW)
         ) movil
         GROUP BY anio
     ) a
