@@ -84,3 +84,11 @@ class CreateJobPayload(QueryPayload):
 class TimeseriesPayload(QueryPayload):
     interval: Annotated[str, Field(max_length=10)] = "month"  # day | month | year
     metric: Annotated[str, Field(max_length=10)] = "avg"      # avg | sum | min | max | count
+
+
+class SpiPayload(QueryPayload):
+    scale: Annotated[int, Field(ge=1, le=24)] = 12  # meses de acumulación (3 | 6 | 12)
+
+
+class HistogramPayload(QueryPayload):
+    bins: Annotated[int, Field(ge=5, le=60)] = 20

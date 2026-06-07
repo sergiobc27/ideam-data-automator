@@ -8,6 +8,8 @@ del dataset más grande resuelve en <1s. Las vistas mensuales/anuales y los
 rankings usan obs_mensual (~24x más rápido que obs_diario a escala nacional);
 solo la serie diaria usa obs_diario y esa sí exige departamentos."""
 
+import math
+import statistics
 from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,7 +18,7 @@ from fastapi.responses import JSONResponse
 from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..catalog import DATASETS
 from ..db import pool
-from ..models import QueryPayload, TimeseriesPayload
+from ..models import HistogramPayload, QueryPayload, SpiPayload, TimeseriesPayload
 from ..normalize import build_filters
 from ..ratelimit import check_rate_limit
 from ..settings import settings
@@ -79,10 +81,12 @@ def timeseries(payload: TimeseriesPayload):
     if _can_use_cagg(payload):
         # month/year salen de obs_mensual (rápido incluso a escala nacional);
         # day necesita obs_diario y a nivel nacional sería demasiado pesado.
+        # Excepción: con estaciones concretas (hietogramas) el escaneo diario
+        # es trivial aunque no haya departamento.
         if payload.interval == "day":
-            if not payload.departments:
+            if not payload.departments and not (payload.catalogFilters or {}).get("stations"):
                 raise HTTPException(
-                    400, "La serie diaria requiere al menos un departamento; usa month o year para el país completo."
+                    400, "La serie diaria requiere un departamento o estaciones concretas; usa month o year para el país completo."
                 )
             table, time_col = "obs_diario", "dia"
         else:
@@ -208,6 +212,231 @@ def monthly_climatology(payload: QueryPayload):
              "min": float(r[2]) if r[2] is not None else None,
              "max": float(r[3]) if r[3] is not None else None, "n": r[4]}
             for r in rows
+        ],
+    }
+
+
+# --- Hidrología: períodos de retorno, SPI, histograma -------------------------
+
+_PRECIP_DATASET = "s54a-sgyg"
+_EULER_MASCHERONI = 0.5772156649015329
+
+
+def _require_single_station(payload):
+    stations = (payload.catalogFilters or {}).get("stations") or []
+    if len(stations) != 1:
+        raise HTTPException(400, "Selecciona exactamente una estación para este análisis.")
+
+
+@router.post("/return-periods")
+def return_periods(payload: QueryPayload):
+    """Períodos de retorno de la precipitación máxima diaria anual.
+
+    Método: serie de máximos anuales (máximo del ACUMULADO diario valor_sum,
+    solo años con >=300 días de datos) + ajuste Gumbel por método de momentos
+    (Chow, Maidment & Mays, 'Applied Hydrology'): beta = s*sqrt(6)/pi,
+    mu = media - 0.5772*beta; x_T = mu - beta*ln(-ln(1 - 1/T)). Las posiciones
+    de graficación empíricas usan Weibull p = m/(n+1).
+    """
+    _require_single_station(payload)
+    if payload.datasetId != _PRECIP_DATASET:
+        raise HTTPException(400, "Los períodos de retorno aplican a precipitación (máxima diaria anual).")
+
+    where, params, _dataset = _cagg_filters(payload)
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT extract(year FROM (dia AT TIME ZONE 'UTC'))::int AS anio, "
+            "max(valor_sum) AS maximo, count(*) AS dias "
+            f"FROM obs_diario WHERE {where} GROUP BY 1 ORDER BY 1",
+            params,
+        ).fetchall()
+
+    valid_years = [
+        {"year": r[0], "maximum": round(float(r[1]), 1), "days": r[2]}
+        for r in rows
+        if r[1] is not None and r[2] >= 300
+    ]
+    discarded = len(rows) - len(valid_years)
+    n = len(valid_years)
+
+    warnings = []
+    if discarded:
+        warnings.append(f"{discarded} año(s) descartado(s) por tener menos de 300 días de datos.")
+    if n < 15:
+        warnings.append("Registro corto (<15 años válidos): estimación de BAJA confianza.")
+    elif n < 30:
+        warnings.append("Registro de menos de 30 años: usa con cautela los Tr altos (50-100 años).")
+
+    if n < 5:
+        return {"stationYears": valid_years, "n": n, "warnings": warnings, "gumbel": None, "quantiles": [], "empirical": []}
+
+    maxima = [y["maximum"] for y in valid_years]
+    mean = statistics.fmean(maxima)
+    std = statistics.stdev(maxima)
+    beta = std * math.sqrt(6) / math.pi
+    mu = mean - _EULER_MASCHERONI * beta
+
+    quantiles = [
+        {"returnPeriod": t, "value": round(mu - beta * math.log(-math.log(1 - 1 / t)), 1)}
+        for t in (2, 5, 10, 25, 50, 100)
+    ]
+    # Posiciones de Weibull sobre los máximos observados (para graficar).
+    ranked = sorted(maxima, reverse=True)
+    empirical = [
+        {"returnPeriod": round((n + 1) / (rank + 1), 2), "value": value}
+        for rank, value in enumerate(ranked)
+    ]
+
+    return {
+        "datasetId": payload.datasetId,
+        "stationYears": valid_years,
+        "n": n,
+        "mean": round(mean, 1),
+        "std": round(std, 1),
+        "gumbel": {"mu": round(mu, 2), "beta": round(beta, 2)},
+        "quantiles": quantiles,
+        "empirical": empirical,
+        "warnings": warnings,
+        "method": "Gumbel por método de momentos sobre máximos anuales de precipitación diaria",
+    }
+
+
+_SPI_CATEGORIES = [
+    (-2.0, "Sequía extrema"),
+    (-1.5, "Sequía severa"),
+    (-1.0, "Sequía moderada"),
+    (1.0, "Normal"),
+    (1.5, "Moderadamente húmedo"),
+    (2.0, "Muy húmedo"),
+]
+
+
+def _spi_category(z):
+    for threshold, label in _SPI_CATEGORIES:
+        if z < threshold:
+            return label
+    return "Extremadamente húmedo"
+
+
+@router.post("/spi")
+def spi(payload: SpiPayload):
+    """SPI (Índice de Precipitación Estandarizada) por percentiles empíricos.
+
+    Acumulados móviles de `scale` meses sobre obs_mensual; cada ventana se
+    compara contra la distribución HISTÓRICA del mismo mes calendario y el
+    percentil se transforma con la inversa de la normal (NormalDist.inv_cdf).
+    Variante no-paramétrica del SPI (la canónica ajusta una gamma — WMO SPI
+    User Guide); más robusta con registros imperfectos, documentada como
+    aproximación.
+    """
+    _require_single_station(payload)
+    if payload.datasetId != _PRECIP_DATASET:
+        raise HTTPException(400, "El SPI se calcula sobre precipitación.")
+    if payload.scale not in (3, 6, 12):
+        raise HTTPException(400, "scale debe ser 3, 6 o 12 meses.")
+
+    where, params, _dataset = _cagg_filters(payload, "mes")
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT (mes AT TIME ZONE 'UTC')::date AS mes, coalesce(valor_sum, 0) "
+            f"FROM obs_mensual WHERE {where} ORDER BY 1",
+            params,
+        ).fetchall()
+
+    if len(rows) < payload.scale + 12:
+        return {"scale": payload.scale, "points": [], "latest": None,
+                "warnings": ["Registro mensual insuficiente para calcular el SPI."]}
+
+    # Serie mensual CONTIGUA: los huecos invalidan las ventanas que los tocan.
+    monthly = {(r[0].year, r[0].month): float(r[1]) for r in rows}
+    first, last = rows[0][0], rows[-1][0]
+
+    def month_seq(start, end):
+        y, m = start.year, start.month
+        while (y, m) <= (end.year, end.month):
+            yield (y, m)
+            m += 1
+            if m == 13:
+                y, m = y + 1, 1
+
+    sequence = list(month_seq(first, last))
+    windows = []  # (year, month_fin, acumulado) solo ventanas completas
+    for index in range(payload.scale - 1, len(sequence)):
+        window = sequence[index - payload.scale + 1 : index + 1]
+        if all(key in monthly for key in window):
+            year, month = sequence[index]
+            windows.append((year, month, sum(monthly[key] for key in window)))
+
+    by_calendar_month = {}
+    for year, month, total in windows:
+        by_calendar_month.setdefault(month, []).append(total)
+
+    normal = statistics.NormalDist()
+    points = []
+    warnings = set()
+    for year, month, total in windows:
+        history = by_calendar_month[month]
+        m = len(history)
+        if m < 15:
+            warnings.add("Algunos meses tienen menos de 15 años de historia: SPI menos confiable en ellos.")
+        # Percentil empírico con corrección de bordes para evitar +-inf.
+        rank = sum(1 for value in history if value <= total)
+        p = min(max(rank / (m + 1), 1 / (2 * m)), 1 - 1 / (2 * m))
+        z = round(normal.inv_cdf(p), 2)
+        points.append({
+            "month": f"{year:04d}-{month:02d}",
+            "precipitation": round(total, 1),
+            "spi": z,
+            "category": _spi_category(z),
+        })
+
+    return {
+        "scale": payload.scale,
+        "points": points,
+        "latest": points[-1] if points else None,
+        "warnings": sorted(warnings),
+        "method": "SPI no-paramétrico (percentil empírico -> inversa normal) sobre acumulados móviles",
+    }
+
+
+@router.post("/histogram")
+def histogram(payload: HistogramPayload):
+    """Histograma de acumulados diarios de precipitación (días secos aparte)."""
+    _require_single_station(payload)
+    if payload.datasetId != _PRECIP_DATASET:
+        raise HTTPException(400, "El histograma de acumulados diarios aplica a precipitación.")
+    where, params, _dataset = _cagg_filters(payload)
+    with pool.connection() as conn:
+        bounds = conn.execute(
+            f"SELECT count(*), max(valor_sum) FROM obs_diario WHERE {where} AND valor_sum > 0",
+            params,
+        ).fetchone()
+        wet_days, max_value = bounds[0], float(bounds[1] or 0)
+        dry_days = conn.execute(
+            f"SELECT count(*) FROM obs_diario WHERE {where} AND coalesce(valor_sum, 0) = 0",
+            params,
+        ).fetchone()[0]
+        buckets = []
+        if wet_days and max_value > 0:
+            buckets = conn.execute(
+                f"SELECT width_bucket(valor_sum, 0, %(h_max)s, %(h_bins)s) AS bucket, count(*) "
+                f"FROM obs_diario WHERE {where} AND valor_sum > 0 GROUP BY 1 ORDER BY 1",
+                {**params, "h_max": max_value + 1e-9, "h_bins": payload.bins},
+            ).fetchall()
+
+    width = (max_value + 1e-9) / payload.bins if max_value > 0 else 0
+    counts = {b[0]: b[1] for b in buckets}
+    return {
+        "dryDays": dry_days,
+        "wetDays": wet_days,
+        "maxDaily": round(max_value, 1),
+        "bins": [
+            {
+                "from": round(width * (i - 1), 1),
+                "to": round(width * i, 1),
+                "count": counts.get(i, 0),
+            }
+            for i in range(1, payload.bins + 1)
         ],
     }
 
