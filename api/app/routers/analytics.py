@@ -308,6 +308,7 @@ def return_periods(payload: QueryPayload):
         "gumbel": {"mu": round(mu, 2), "beta": round(beta, 2)},
         "quantiles": quantiles,
         "empirical": empirical,
+        "goodnessOfFit": _gumbel_ks_test(maxima, mu, beta),
         "warnings": warnings,
         "method": "Gumbel por método de momentos sobre máximos anuales de precipitación diaria",
     }
@@ -330,6 +331,32 @@ def _gumbel_quantiles(maxima, return_periods):
     mu = mean - _EULER_MASCHERONI * beta
     quantiles = {t: mu - beta * math.log(-math.log(1 - 1 / t)) for t in return_periods}
     return {"mu": round(mu, 2), "beta": round(beta, 2)}, quantiles
+
+
+def _gumbel_ks_test(maxima, mu, beta, alpha=0.05):
+    """Prueba de bondad de ajuste Kolmogorov-Smirnov del Gumbel ajustado.
+
+    Compara la CDF empírica de los máximos anuales con la teórica de Gumbel
+    F(x)=exp(-exp(-(x-mu)/beta)); el estadístico D es la máxima diferencia.
+    Si D < valor crítico (≈1.36/√n para α=0.05), NO se rechaza el ajuste. El
+    Manual INVÍAS exige este contraste (Smirnov-Kolmogorov o Chi-cuadrado)
+    antes de aceptar la distribución de extremos. Implementación pura."""
+    n = len(maxima)
+    if n < 5 or beta <= 0:
+        return None
+    ordered = sorted(maxima)
+    d = 0.0
+    for i, x in enumerate(ordered, start=1):
+        f_teo = math.exp(-math.exp(-(x - mu) / beta))
+        d = max(d, abs(f_teo - i / n), abs(f_teo - (i - 1) / n))
+    d_crit = 1.36 / math.sqrt(n)  # aproximación asintótica, α=0.05
+    return {
+        "test": "Kolmogorov-Smirnov",
+        "statistic": round(d, 4),
+        "critical": round(d_crit, 4),
+        "alpha": alpha,
+        "passes": bool(d < d_crit),
+    }
 
 
 def _fit_idf_equation(samples):

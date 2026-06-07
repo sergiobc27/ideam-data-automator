@@ -14,6 +14,7 @@ import pytest
 from app.routers.analytics import (
     _bucket_date,
     _fit_idf_equation,
+    _gumbel_ks_test,
     _gumbel_quantiles,
     _solve_3x3,
     _spi_category,
@@ -74,6 +75,28 @@ def test_gumbel_monotonia():
     _params, q = _gumbel_quantiles([12, 18, 25, 31, 40, 22, 28], (2, 5, 10, 25, 50, 100))
     valores = [q[t] for t in (2, 5, 10, 25, 50, 100)]
     assert valores == sorted(valores)
+
+
+# --- _gumbel_ks_test ----------------------------------------------------------
+
+def test_ks_test_estructura_y_pocos():
+    assert _gumbel_ks_test([10, 20, 30, 40], 20, 5) is None  # n<5
+    r = _gumbel_ks_test([10, 20, 30, 40, 50], 22.9, 12.3)
+    assert r["test"] == "Kolmogorov-Smirnov"
+    assert 0 <= r["statistic"] <= 1
+    assert r["critical"] > 0
+    assert isinstance(r["passes"], bool)
+
+
+def test_ks_test_acepta_serie_gumbel():
+    # Serie construida desde el cuantil Gumbel exacto (sigue Gumbel por diseño):
+    # el test NO debe rechazarla.
+    mu, beta = 30.0, 10.0
+    n = 25
+    maxima = [mu - beta * math.log(-math.log((i - 0.5) / n)) for i in range(1, n + 1)]
+    r = _gumbel_ks_test(maxima, mu, beta)
+    assert r["passes"] is True
+    assert r["statistic"] < r["critical"]
 
 
 # --- _fit_idf_equation --------------------------------------------------------
