@@ -36,6 +36,13 @@ echo "[$(date -u +%H:%M:%S)] IDF backfill modo=$MODE estaciones=$TOTAL"
 i=0
 for code in $CODES; do
   i=$((i+1))
+  # Valida el código ANTES de interpolarlo en SQL (defensa anti-inyección de 2º
+  # orden: viene de mv_catalogo/idf_estado, pero los códigos del IDEAM son
+  # alfanuméricos y cualquier cosa fuera de eso se omite).
+  if ! [[ "$code" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "[$(date -u +%H:%M:%S)] ($i/$TOTAL) codigo invalido omitido: $code"
+    continue
+  fi
   t0=$(date +%s)
   anios=$(docker exec ideam-pg psql -U ideam -d ideam -tAc "SELECT idf_compute_station('$code');" 2>&1)
   echo "[$(date -u +%H:%M:%S)] ($i/$TOTAL) $code -> $anios años ($(($(date +%s)-t0))s)"
