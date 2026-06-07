@@ -34,9 +34,18 @@ def _data_freshness():
         return {"latestObservation": None, "lastSync": None}
 
 
+def _cached_json(payload, ttl_seconds):
+    """JSON cacheable en el borde: el dato cambia 2x/día (delta), así que unos
+    minutos de antigüedad son irrelevantes y Cloudflare absorbe los repetidos."""
+    return JSONResponse(
+        payload,
+        headers={"cache-control": f"public, max-age={ttl_seconds}, stale-while-revalidate={ttl_seconds}"},
+    )
+
+
 @router.get("/api/meta")
 def meta():
-    return {
+    return _cached_json({
         "datasets": [
             {"id": d["id"], "name": d["name"], "category": d["category"], "dateColumn": d["dateColumn"]}
             for d in DATASETS
@@ -47,7 +56,7 @@ def meta():
         "maxExportRows": settings.export_max_rows,
         "catalogFilters": CATALOG_FILTERS,
         "dataFreshness": _data_freshness(),
-    }
+    }, ttl_seconds=300)
 
 
 @router.get("/api/date-range")
@@ -67,7 +76,7 @@ def date_range(datasetId: str):
     # directo regresaría el día anterior en los bordes del rango.
     start = start.astimezone(timezone.utc) if start else None
     end = end.astimezone(timezone.utc) if end else None
-    return {
+    return _cached_json({
         "datasetId": dataset["id"],
         "dateColumn": dataset["dateColumn"],
         "startDate": start.date().isoformat() if start else None,
@@ -75,8 +84,8 @@ def date_range(datasetId: str):
         "startYear": start.year if start else None,
         "endYear": end.year if end else None,
         "cachedAt": datetime.now(timezone.utc).isoformat(),
-        "cacheTtlSeconds": 0,
-    }
+        "cacheTtlSeconds": 3600,
+    }, ttl_seconds=3600)
 
 
 @router.get("/api/stations.geojson")
@@ -133,4 +142,4 @@ def municipalities(department: list[str] = Query(default=[])):
             "WHERE upper(departamento) = ANY(%s) AND municipio IS NOT NULL ORDER BY municipio",
             (sorted(variants),),
         ).fetchall()
-    return {"municipalities": [r[0] for r in rows]}
+    return _cached_json({"municipalities": [r[0] for r in rows]}, ttl_seconds=3600)

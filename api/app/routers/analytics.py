@@ -11,6 +11,7 @@ solo la serie diaria usa obs_diario y esa sí exige departamentos."""
 from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..catalog import DATASETS
@@ -232,4 +233,8 @@ def datasets_overview():
                 "lastObservation": _bucket_date(r[4]).isoformat() if r and r[4] else None,
             }
         )
-    return {"datasets": overview}
+    # GET cacheable: el contenido solo cambia con el delta (2x/día).
+    return JSONResponse(
+        {"datasets": overview},
+        headers={"cache-control": "public, max-age=3600, stale-while-revalidate=3600"},
+    )
