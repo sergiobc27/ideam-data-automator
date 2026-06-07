@@ -216,25 +216,38 @@ def submit_job(job_id):
 # siempre (spinner infinito en el front).
 
 _RECONCILER_STARTED = threading.Event()
+_RECONCILER_STOP = threading.Event()
+_reconciler_thread = None
+# Clave del advisory lock: solo UN proceso uvicorn ejecuta cada barrido/reencole
+# (los 2 workers arrancan a la vez; sin esto encolaban 2N tareas redundantes).
+_RECONCILE_LOCK_KEY = 0x1DEA0001
 
+# planning/processing: 20 min de gracia (un job vivo refresca updated_at; el peor
+# caso legítimo es el sort inicial, statement_timeout 900s). queued: 30 min (puede
+# esperar slot legítimamente, pero con cap de 4 jobs y rate limit, un queued tan
+# viejo es huérfano de un proceso muerto → spinner infinito si no se barre).
 _STALE_SQL = (
     "UPDATE export_jobs SET status = 'failed', "
     "error = 'La exportacion se interrumpio por un reinicio del servidor. Genera una nueva.', "
     "finished_at = now(), updated_at = now(), current_stage = 'Fallido' "
-    "WHERE status IN ('planning', 'processing') "
-    "AND updated_at < now() - interval '20 minutes'"
+    "WHERE (status IN ('planning', 'processing') AND updated_at < now() - interval '20 minutes') "
+    "   OR (status = 'queued' AND updated_at < now() - interval '30 minutes')"
 )
 
 
 def reconcile_on_startup():
-    """Reencola los jobs 'queued' de un proceso anterior. El claim atómico de
-    _run_job evita la doble ejecución aunque ambos workers de uvicorn (o un
-    worker y el proceso viejo) reencolen el mismo job."""
+    """Reencola los jobs 'queued' de un proceso anterior, bajo advisory lock para
+    que solo UN worker lo haga (el claim atómico de _run_job ya evita la doble
+    ejecución; el lock evita además el doble submit y las queries redundantes)."""
     try:
         with pool.connection() as conn:
-            rows = conn.execute(
-                "SELECT job_id FROM export_jobs WHERE status = 'queued'"
-            ).fetchall()
+            got = conn.execute("SELECT pg_try_advisory_lock(%s)", (_RECONCILE_LOCK_KEY,)).fetchone()[0]
+            if not got:
+                return  # otro worker se encarga
+            try:
+                rows = conn.execute("SELECT job_id FROM export_jobs WHERE status = 'queued'").fetchall()
+            finally:
+                conn.execute("SELECT pg_advisory_unlock(%s)", (_RECONCILE_LOCK_KEY,))
         for (job_id,) in rows:
             submit_job(job_id)
         if rows:
@@ -244,21 +257,38 @@ def reconcile_on_startup():
 
 
 def start_reconciler():
-    """Barrido periódico (1/min) de jobs huérfanos. 20 min de gracia: un job
-    vivo refresca updated_at constantemente; el peor caso legítimo es el sort
-    inicial de un grupo grande (statement_timeout 900s)."""
+    """Arranca el barrido periódico (1/min) de jobs huérfanos."""
+    global _reconciler_thread
     if _RECONCILER_STARTED.is_set():
         return
     _RECONCILER_STARTED.set()
-    threading.Thread(target=_reconcile_loop, name="export-reconciler", daemon=True).start()
+    _RECONCILER_STOP.clear()
+    _reconciler_thread = threading.Thread(target=_reconcile_loop, name="export-reconciler", daemon=True)
+    _reconciler_thread.start()
+
+
+def stop_reconciler():
+    """Para el barrido limpio antes de cerrar el pool (evita UPDATE a medias)."""
+    _RECONCILER_STOP.set()
+    if _reconciler_thread is not None:
+        _reconciler_thread.join(timeout=5)
+    _RECONCILER_STARTED.clear()
 
 
 def _reconcile_loop():
-    while True:
-        time.sleep(60)
+    # Event.wait en vez de sleep: despierta de inmediato al apagar.
+    while not _RECONCILER_STOP.wait(60):
         try:
             with pool.connection() as conn:
-                conn.execute(_STALE_SQL)
+                # Advisory lock por barrido: serializa entre los 2 workers sin
+                # un líder permanente. Si otro lo tiene, este ciclo se salta.
+                got = conn.execute("SELECT pg_try_advisory_lock(%s)", (_RECONCILE_LOCK_KEY,)).fetchone()[0]
+                if not got:
+                    continue
+                try:
+                    conn.execute(_STALE_SQL)
+                finally:
+                    conn.execute("SELECT pg_advisory_unlock(%s)", (_RECONCILE_LOCK_KEY,))
         except Exception:  # noqa: BLE001
             logger.exception("Barrido de jobs huérfanos falló")
 
@@ -400,6 +430,7 @@ def _run_job(job_id):
                     f"{where} AND departamento IS NOT DISTINCT FROM %(g_dep)s "
                     "AND municipio IS NOT DISTINCT FROM %(g_mun)s"
                 )
+                written_groups = []  # group_where realmente escritos -> conteo exacto al final
                 for dep, mun in groups:
                     group_params = {**params, "g_dep": dep, "g_mun": mun}
                     name = f"{slug(dataset_name)}_{slug(dep)}_{slug(mun)}_{now.strftime('%H%M_%d%m%y')}"
@@ -414,6 +445,7 @@ def _run_job(job_id):
                         ).fetchone()
                         if not has_rows:
                             continue
+                        written_groups.append(dict(group_params))
                         zinfo = zipfile.ZipInfo(rel, date_time=now.timetuple()[:6])
                         zinfo.compress_type = zipfile.ZIP_DEFLATED
                         with zf.open(zinfo, mode="w") as dest, conn.cursor() as cur:
@@ -425,31 +457,29 @@ def _run_job(job_id):
                                 for data in copy:
                                     chunk = bytes(data)
                                     dest.write(chunk)
+                                    # Progreso APROXIMADO (newlines pueden venir
+                                    # embebidos en campos citados); el conteo
+                                    # EXACTO sale de la agg final. El candado real
+                                    # es por bytes, monotónico e inmune a eso, y
+                                    # se evalúa DENTRO del COPY (no solo entre
+                                    # grupos) para frenar un grupo gigante a tiempo.
                                     processed += chunk.count(b"\n")
-                                    if processed > settings.export_max_rows:
+                                    if _zip_bytes_written(zf, zip_path) > settings.export_max_bytes:
                                         raise ExportTooLargeError(
                                             f"La exportacion supero el limite de "
-                                            f"{settings.export_max_rows:,} filas. Acota los "
+                                            f"{settings.export_max_bytes:,} bytes. Acota los "
                                             "filtros e intenta de nuevo.".replace(",", ".")
                                         )
                                     if time.time() - last_progress >= 2:
                                         last_progress = time.time()
                                         _update(
                                             job_id,
-                                            processed_rows=processed,
+                                            processed_rows=max(processed - len(written_groups), 0),
                                             completed_pages=min(processed // page_size, total_pages),
                                             current_stage=f"Procesando {dep or 'N/D'} / {mun or 'N/D'}",
                                         )
-                    processed -= 1  # la línea HEADER del archivo no es una fila
                     if mun is not None:
                         municipios.add(mun)
-                    written = _zip_bytes_written(zf, zip_path)
-                    if written > settings.export_max_bytes:
-                        raise ExportTooLargeError(
-                            f"La exportacion supero el limite de "
-                            f"{settings.export_max_bytes:,} bytes. Acota los filtros e "
-                            "intenta de nuevo.".replace(",", ".")
-                        )
             else:
                 for dep, mun in groups:
                     writers = _GroupWriters(workdir, dataset_name, dep, mun, now, formats)
@@ -529,20 +559,34 @@ def _run_job(job_id):
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
-    if fast_csv and processed > 0:
-        # Métricas de la vía rápida: una sola query agregada (escaneo podado)
-        # en vez de contadores fila a fila en Python.
+    if fast_csv and written_groups:
+        # Métricas EXACTAS de la vía rápida: una query agregada restringida a
+        # los grupos REALMENTE escritos (auditoría #4: el where global contaba
+        # filas que ningún grupo emitió, sobreestimando el rowCount citado).
+        # La igualdad NULL-aware replica el group_where del COPY.
+        agg_params = dict(params)
+        group_clauses = []
+        for i, gp in enumerate(written_groups):
+            agg_params[f"ag_dep_{i}"] = gp["g_dep"]
+            agg_params[f"ag_mun_{i}"] = gp["g_mun"]
+            group_clauses.append(
+                f"(departamento IS NOT DISTINCT FROM %(ag_dep_{i})s "
+                f"AND municipio IS NOT DISTINCT FROM %(ag_mun_{i})s)"
+            )
+        agg_where = f"{where} AND ({' OR '.join(group_clauses)})"
         with pool.connection() as conn:
             conn.execute("SET LOCAL statement_timeout = '900s'")
             agg = conn.execute(
                 "SELECT count(*), count(DISTINCT codigoestacion), "
                 "count(DISTINCT zonahidrografica), min(fechaobservacion), "
-                f"max(fechaobservacion) FROM observaciones WHERE {where}",
-                params,
+                f"max(fechaobservacion) FROM observaciones WHERE {agg_where}",
+                agg_params,
             ).fetchone()
         processed = int(agg[0])
         station_count, zone_count = int(agg[1]), int(agg[2])
         observed_start, observed_end = agg[3], agg[4]
+    elif fast_csv:
+        processed = 0
 
     finished = datetime.now(timezone.utc)
     expires = finished + timedelta(seconds=settings.export_ttl_seconds)

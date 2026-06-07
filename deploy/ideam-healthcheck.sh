@@ -20,11 +20,13 @@ ping_hc() {  # $1=url $2=sufijo ('' exito, '/fail' fallo)
 # 1) API sana DE VERDAD: /api/ready prueba la DB (no solo el proceso) y
 #    ademas se verifica el camino publico completo (edge -> worker -> tunel),
 #    porque un tunel caido con API local viva pasaba invisible.
+# --retry 3: un blip de 1s de Cloudflare/tunel NO debe disparar /fail (evita
+# fatiga de alarmas por falsos positivos transitorios - auditoria #4).
 PUBLIC_URL="${PUBLIC_HEALTH_URL:-https://ideam.sergiobc.com/api/health}"
-if ! curl -fsS -m 10 -o /dev/null http://127.0.0.1:8000/api/ready; then
+if ! curl -fsS -m 10 --retry 3 --retry-delay 2 --retry-all-errors -o /dev/null http://127.0.0.1:8000/api/ready; then
   logger -t ideam-healthcheck "API local /api/ready NO responde (DB o proceso)"
   ping_hc "${HC_API_URL:-}" "/fail"
-elif ! curl -fsS -m 15 -o /dev/null "$PUBLIC_URL"; then
+elif ! curl -fsS -m 15 --retry 3 --retry-delay 2 --retry-all-errors -o /dev/null "$PUBLIC_URL"; then
   logger -t ideam-healthcheck "camino publico caido (tunel/worker): $PUBLIC_URL"
   ping_hc "${HC_API_URL:-}" "/fail"
 else

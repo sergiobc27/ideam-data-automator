@@ -146,9 +146,12 @@ def stations_geojson():
         }
         for r in rows
     ]
+    # 2h (antes 24h): el catálogo cambia poco, pero 24h dejaba estaciones
+    # nuevas del delta invisibles demasiado tiempo e iba contra los TTL del
+    # resto de la API (auditoría #4).
     return JSONResponse(
         {"type": "FeatureCollection", "features": features},
-        headers={"cache-control": "public, max-age=86400, stale-while-revalidate=86400"},
+        headers={"cache-control": "public, max-age=7200, stale-while-revalidate=7200"},
     )
 
 

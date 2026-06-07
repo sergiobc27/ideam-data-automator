@@ -84,9 +84,16 @@ def timeseries(payload: TimeseriesPayload):
         # Excepción: con estaciones concretas (hietogramas) el escaneo diario
         # es trivial aunque no haya departamento.
         if payload.interval == "day":
-            if not payload.departments and not (payload.catalogFilters or {}).get("stations"):
+            stations = (payload.catalogFilters or {}).get("stations") or []
+            if not payload.departments and not stations:
                 raise HTTPException(
                     400, "La serie diaria requiere un departamento o estaciones concretas; usa month o year para el país completo."
+                )
+            # Sin departamento, la serie diaria solo se permite para POCAS
+            # estaciones (hietogramas): cota anti-DoS (auditoría #4).
+            if not payload.departments and len(stations) > 10:
+                raise HTTPException(
+                    400, "La serie diaria por estaciones admite máximo 10 a la vez; reduce la selección o usa month/year."
                 )
             table, time_col = "obs_diario", "dia"
         else:
@@ -233,10 +240,14 @@ def return_periods(payload: QueryPayload):
     """Períodos de retorno de la precipitación máxima diaria anual.
 
     Método: serie de máximos anuales (máximo del ACUMULADO diario valor_sum,
-    solo años con >=300 días de datos) + ajuste Gumbel por método de momentos
-    (Chow, Maidment & Mays, 'Applied Hydrology'): beta = s*sqrt(6)/pi,
+    solo años con >=300 días con MEDICIÓN VÁLIDA) + ajuste Gumbel por método de
+    momentos (Chow, Maidment & Mays, 'Applied Hydrology'): beta = s*sqrt(6)/pi,
     mu = media - 0.5772*beta; x_T = mu - beta*ln(-ln(1 - 1/T)). Las posiciones
     de graficación empíricas usan Weibull p = m/(n+1).
+
+    Saneo (auditoría #4): se descartan máximos no finitos o negativos (centinelas
+    tipo -9999 del IDEAM contaminarían la curva), y la completitud se mide por
+    días con n_validos>0, no por buckets existentes.
     """
     _require_single_station(payload)
     if payload.datasetId != _PRECIP_DATASET:
@@ -246,7 +257,8 @@ def return_periods(payload: QueryPayload):
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT extract(year FROM (dia AT TIME ZONE 'UTC'))::int AS anio, "
-            "max(valor_sum) AS maximo, count(*) AS dias "
+            "max(valor_sum) FILTER (WHERE n_validos > 0 AND valor_sum >= 0) AS maximo, "
+            "count(*) FILTER (WHERE n_validos > 0) AS dias_validos "
             f"FROM obs_diario WHERE {where} GROUP BY 1 ORDER BY 1",
             params,
         ).fetchall()
@@ -254,7 +266,7 @@ def return_periods(payload: QueryPayload):
     valid_years = [
         {"year": r[0], "maximum": round(float(r[1]), 1), "days": r[2]}
         for r in rows
-        if r[1] is not None and r[2] >= 300
+        if r[1] is not None and math.isfinite(r[1]) and r[1] >= 0 and r[2] >= 300
     ]
     discarded = len(rows) - len(valid_years)
     n = len(valid_years)
@@ -374,12 +386,28 @@ def spi(payload: SpiPayload):
     normal = statistics.NormalDist()
     points = []
     warnings = set()
+    # Techo del SPI no-paramétrico: con m años de historia el percentil se acota
+    # a [1/2m, 1-1/2m] (Hazen), así que |SPI| no puede superar este valor; con
+    # registros cortos las categorías extremas son INALCANZABLES (artefacto
+    # conocido, no error). Se expone para honestidad metodológica.
+    min_history = min((len(v) for v in by_calendar_month.values()), default=0)
+    spi_ceiling = round(abs(normal.inv_cdf(1 / (2 * max(min_history, 1)))), 2) if min_history else None
     for year, month, total in windows:
         history = by_calendar_month[month]
         m = len(history)
+        if m < 3:
+            # Historia insuficiente: el SPI no es interpretable (sale ~0 siempre).
+            warnings.add("Algunos meses tienen <3 años de historia: SPI no calculable en ellos.")
+            points.append({
+                "month": f"{year:04d}-{month:02d}",
+                "precipitation": round(total, 1),
+                "spi": None,
+                "category": "No calculable",
+            })
+            continue
         if m < 15:
             warnings.add("Algunos meses tienen menos de 15 años de historia: SPI menos confiable en ellos.")
-        # Percentil empírico con corrección de bordes para evitar +-inf.
+        # Percentil empírico con corrección de bordes (Hazen) para evitar +-inf.
         rank = sum(1 for value in history if value <= total)
         p = min(max(rank / (m + 1), 1 / (2 * m)), 1 - 1 / (2 * m))
         z = round(normal.inv_cdf(p), 2)
@@ -390,12 +418,20 @@ def spi(payload: SpiPayload):
             "category": _spi_category(z),
         })
 
+    if spi_ceiling is not None and spi_ceiling < 2:
+        warnings.add(
+            f"Con el registro disponible, |SPI| no supera ±{spi_ceiling}: las categorías "
+            "extremas (±2) no son alcanzables (limitación del método no-paramétrico)."
+        )
+
+    latest = next((p for p in reversed(points) if p["spi"] is not None), points[-1] if points else None)
     return {
         "scale": payload.scale,
         "points": points,
-        "latest": points[-1] if points else None,
+        "latest": latest,
+        "spiCeiling": spi_ceiling,
         "warnings": sorted(warnings),
-        "method": "SPI no-paramétrico (percentil empírico -> inversa normal) sobre acumulados móviles",
+        "method": "SPI no-paramétrico (percentil empírico Hazen -> inversa normal) sobre acumulados móviles",
     }
 
 
@@ -407,20 +443,24 @@ def histogram(payload: HistogramPayload):
         raise HTTPException(400, "El histograma de acumulados diarios aplica a precipitación.")
     where, params, _dataset = _cagg_filters(payload)
     with pool.connection() as conn:
+        # Día seco = MEDIDO y sin lluvia (n_validos>0). Un bucket con todas las
+        # lecturas NULL es "sin dato", NO un día seco (auditoría #4): contarlo
+        # como seco sesgaba el histograma hacia falsas sequías. dias/wet/max en
+        # una sola pasada con FILTER (antes 2 escaneos).
         bounds = conn.execute(
-            f"SELECT count(*), max(valor_sum) FROM obs_diario WHERE {where} AND valor_sum > 0",
+            "SELECT count(*) FILTER (WHERE n_validos > 0 AND valor_sum > 0), "
+            "count(*) FILTER (WHERE n_validos > 0 AND coalesce(valor_sum, 0) = 0), "
+            "count(*) FILTER (WHERE n_validos IS NULL OR n_validos = 0), "
+            "max(valor_sum) FILTER (WHERE n_validos > 0) "
+            f"FROM obs_diario WHERE {where}",
             params,
         ).fetchone()
-        wet_days, max_value = bounds[0], float(bounds[1] or 0)
-        dry_days = conn.execute(
-            f"SELECT count(*) FROM obs_diario WHERE {where} AND coalesce(valor_sum, 0) = 0",
-            params,
-        ).fetchone()[0]
+        wet_days, dry_days, no_data_days, max_value = bounds[0], bounds[1], bounds[2], float(bounds[3] or 0)
         buckets = []
         if wet_days and max_value > 0:
             buckets = conn.execute(
                 f"SELECT width_bucket(valor_sum, 0, %(h_max)s, %(h_bins)s) AS bucket, count(*) "
-                f"FROM obs_diario WHERE {where} AND valor_sum > 0 GROUP BY 1 ORDER BY 1",
+                f"FROM obs_diario WHERE {where} AND n_validos > 0 AND valor_sum > 0 GROUP BY 1 ORDER BY 1",
                 {**params, "h_max": max_value + 1e-9, "h_bins": payload.bins},
             ).fetchall()
 
@@ -429,6 +469,7 @@ def histogram(payload: HistogramPayload):
     return {
         "dryDays": dry_days,
         "wetDays": wet_days,
+        "noDataDays": no_data_days,
         "maxDaily": round(max_value, 1),
         "bins": [
             {

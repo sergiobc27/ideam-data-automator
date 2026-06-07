@@ -9,12 +9,15 @@ from .settings import settings
 # statement_timeout: ninguna consulta de la API puede correr mas de 30s.
 # Sin esto, un resumen pesado sobre la hypertable de 764M filas se quedaba
 # minutos bloqueando workers de uvicorn (visto en produccion el 2026-06-06).
+# timezone EXPLICITO (auditoria #4): los caggs estan alineados a UTC y el
+# exporter formatea fechas con to_char asumiendo America/Bogota; fijarlo aqui
+# evita que un default a UTC del servidor desplace las fechas 5h en silencio.
 pool = ConnectionPool(
     settings.database_url,
     min_size=1,
     max_size=8,
     open=False,
-    kwargs={"options": "-c statement_timeout=30000"},
+    kwargs={"options": "-c statement_timeout=30000 -c timezone=America/Bogota"},
 )
 
 _SCHEMA_API = Path(__file__).with_name("schema_api.sql").read_text(encoding="utf-8")

@@ -5,16 +5,31 @@ un payload patológico (100k entradas en catalogFilters, fechas malformadas) no
 infle los ANY(...) de SQL ni produzca 500 crudos — Pydantic responde 400.
 """
 
+from datetime import date
 from typing import Annotated
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, field_validator
 
 # Colombia tiene 33 departamentos; el front manda nombres canónicos cortos.
 _Departments = Annotated[list[Annotated[str, Field(max_length=80)]], Field(max_length=40)]
-# Fecha ISO simple; el resto del pipeline le concatena la hora. El string
-# vacío se acepta (el front lo manda cuando no hay rango) y los filtros lo
-# ignoran igual que a None.
-_DateStr = Annotated[str, Field(pattern=r"^$|^\d{4}-\d{2}-\d{2}$")]
+
+
+def _validate_date(value):
+    """Fecha ISO o string vacío (el front lo manda cuando no hay rango).
+    Valida el CALENDARIO, no solo el formato: '2024-13-45' debe dar 400, no un
+    DataError 500 al castear en Postgres (auditoría #4)."""
+    if value is None or value == "":
+        return value
+    if not isinstance(value, str):
+        raise ValueError("fecha debe ser texto YYYY-MM-DD")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise ValueError("fecha invalida; usa YYYY-MM-DD")
+    return value
+
+
+_DateStr = Annotated[str, BeforeValidator(_validate_date)]
 
 _MAX_FILTER_VALUES = 500   # estaciones seleccionables a mano: holgado pero finito
 _MAX_FILTER_LENGTH = 160   # nombres de estación/municipio reales caben de sobra

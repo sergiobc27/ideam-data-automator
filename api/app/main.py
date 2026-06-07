@@ -39,6 +39,7 @@ async def lifespan(_app: FastAPI):
     exporter.start_reconciler()
     logger.info("API lista.")
     yield
+    exporter.stop_reconciler()  # para el barrido antes de cerrar el pool
     pool.close()
 
 
