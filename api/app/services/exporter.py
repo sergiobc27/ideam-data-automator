@@ -61,6 +61,27 @@ PARQUET_SCHEMA = pa.schema(
 BATCH_SIZE = 50_000
 VALID_FORMATS = ("csv", "json", "parquet")
 
+# Vía rápida CSV: PostgreSQL genera el CSV (COPY) y Python solo canaliza bytes
+# al ZIP. Benchmark 2026-06-07 (Barranquilla, 484K filas): el escaneo+CSV en PG
+# toma ~2-6s; el cuello real eran los ~5K filas/s del bucle Python fila a fila.
+# La fecha se formatea en SQL para producir EXACTAMENTE el mismo texto que
+# _fecha_str() (ISO sin zona, en hora de la sesión America/Bogota).
+_COPY_COLUMNS = ", ".join(
+    "to_char(fechaobservacion, 'YYYY-MM-DD\"T\"HH24:MI:SS') AS fechaobservacion"
+    if col == "fechaobservacion" else col
+    for col in ROW_COLUMNS
+)
+
+
+def _copy_select_for(where):
+    """SELECT del COPY de la vía rápida. El ORDER BY estación+fecha coincide
+    con el layout físico de la compresión (segmentby estación, orderby fecha):
+    PostgreSQL streamea sin sort externo."""
+    return (
+        f"SELECT {_COPY_COLUMNS} FROM observaciones WHERE {where} "
+        "ORDER BY codigoestacion, fechaobservacion"
+    )
+
 
 class ExportTooLargeError(Exception):
     """El ZIP superó EXPORT_MAX_BYTES durante la escritura: se aborta el job."""
@@ -358,6 +379,9 @@ def _run_job(job_id):
     last_progress = 0.0
     stations, municipios, zonas = set(), set(), set()
     observed_start = observed_end = None
+    # Métricas de la vía rápida (vienen de una query agregada, no del bucle).
+    station_count = zone_count = None
+    fast_csv = set(formats or ()) == {"csv"}
 
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -369,6 +393,63 @@ def _run_job(job_id):
                     encoding="utf-8",
                 )
                 zf.write(evidencia, evidencia.relative_to(workdir).as_posix())
+            elif fast_csv:
+                # VÍA RÁPIDA (solo CSV): COPY de PostgreSQL directo al ZIP,
+                # sin pasar fila a fila por Python (~6-8x más rápido).
+                group_where = (
+                    f"{where} AND departamento IS NOT DISTINCT FROM %(g_dep)s "
+                    "AND municipio IS NOT DISTINCT FROM %(g_mun)s"
+                )
+                for dep, mun in groups:
+                    group_params = {**params, "g_dep": dep, "g_mun": mun}
+                    name = f"{slug(dataset_name)}_{slug(dep)}_{slug(mun)}_{now.strftime('%H%M_%d%m%y')}"
+                    rel = f"{slug(dataset_name)}/{slug(dep)}/{slug(mun)}/csv/{name}.csv"
+                    with pool.connection() as conn:
+                        conn.execute("SET LOCAL statement_timeout = '900s'")
+                        # Los grupos salen del catálogo (sin fechas): saltar los
+                        # que no tienen filas en el rango pedido.
+                        has_rows = conn.execute(
+                            f"SELECT 1 FROM observaciones WHERE {group_where} LIMIT 1",
+                            group_params,
+                        ).fetchone()
+                        if not has_rows:
+                            continue
+                        zinfo = zipfile.ZipInfo(rel, date_time=now.timetuple()[:6])
+                        zinfo.compress_type = zipfile.ZIP_DEFLATED
+                        with zf.open(zinfo, mode="w") as dest, conn.cursor() as cur:
+                            with cur.copy(
+                                f"COPY ({_copy_select_for(group_where)}) "
+                                "TO STDOUT WITH (FORMAT csv, HEADER)",
+                                group_params,
+                            ) as copy:
+                                for data in copy:
+                                    chunk = bytes(data)
+                                    dest.write(chunk)
+                                    processed += chunk.count(b"\n")
+                                    if processed > settings.export_max_rows:
+                                        raise ExportTooLargeError(
+                                            f"La exportacion supero el limite de "
+                                            f"{settings.export_max_rows:,} filas. Acota los "
+                                            "filtros e intenta de nuevo.".replace(",", ".")
+                                        )
+                                    if time.time() - last_progress >= 2:
+                                        last_progress = time.time()
+                                        _update(
+                                            job_id,
+                                            processed_rows=processed,
+                                            completed_pages=min(processed // page_size, total_pages),
+                                            current_stage=f"Procesando {dep or 'N/D'} / {mun or 'N/D'}",
+                                        )
+                    processed -= 1  # la línea HEADER del archivo no es una fila
+                    if mun is not None:
+                        municipios.add(mun)
+                    written = _zip_bytes_written(zf, zip_path)
+                    if written > settings.export_max_bytes:
+                        raise ExportTooLargeError(
+                            f"La exportacion supero el limite de "
+                            f"{settings.export_max_bytes:,} bytes. Acota los filtros e "
+                            "intenta de nuevo.".replace(",", ".")
+                        )
             else:
                 for dep, mun in groups:
                     writers = _GroupWriters(workdir, dataset_name, dep, mun, now, formats)
@@ -383,7 +464,9 @@ def _run_job(job_id):
                                 f"SELECT {cols} FROM observaciones WHERE {where} "
                                 "AND departamento IS NOT DISTINCT FROM %(g_dep)s "
                                 "AND municipio IS NOT DISTINCT FROM %(g_mun)s "
-                                "ORDER BY fechaobservacion",
+                                # estación+fecha coincide con el layout físico de la
+                                # compresión: evita el sort externo en grupos grandes.
+                                "ORDER BY codigoestacion, fechaobservacion",
                                 {**params, "g_dep": dep, "g_mun": mun},
                             )
                             while True:
@@ -446,6 +529,21 @@ def _run_job(job_id):
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
+    if fast_csv and processed > 0:
+        # Métricas de la vía rápida: una sola query agregada (escaneo podado)
+        # en vez de contadores fila a fila en Python.
+        with pool.connection() as conn:
+            conn.execute("SET LOCAL statement_timeout = '900s'")
+            agg = conn.execute(
+                "SELECT count(*), count(DISTINCT codigoestacion), "
+                "count(DISTINCT zonahidrografica), min(fechaobservacion), "
+                f"max(fechaobservacion) FROM observaciones WHERE {where}",
+                params,
+            ).fetchone()
+        processed = int(agg[0])
+        station_count, zone_count = int(agg[1]), int(agg[2])
+        observed_start, observed_end = agg[3], agg[4]
+
     finished = datetime.now(timezone.utc)
     expires = finished + timedelta(seconds=settings.export_ttl_seconds)
     size = zip_path.stat().st_size
@@ -465,10 +563,10 @@ def _run_job(job_id):
         "fileName": zip_name,
         "rowCount": processed,
         "noData": row_count == 0,
-        "stationCount": len(stations),
+        "stationCount": station_count if station_count is not None else len(stations),
         "municipalityCount": len(municipios),
         "departmentCount": len(canonicals),
-        "zoneCount": len(zonas),
+        "zoneCount": zone_count if zone_count is not None else len(zonas),
         "processingMs": int((time.time() - t0) * 1000),
         "sizeBytes": size,
         "observedStart": _fecha_str(observed_start) or "",
