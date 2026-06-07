@@ -15,6 +15,24 @@ def health():
     return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}
 
 
+def _data_freshness():
+    # Frescura del espejo desde ingest_state (high-water mark del delta):
+    # instantáneo, sin tocar la hypertable. Es informativo: si la DB no
+    # responde, /api/meta sigue funcionando con valores nulos.
+    try:
+        with pool.connection() as conn:
+            row = conn.execute(
+                "SELECT max(hwm_fecha), max(updated_at) FROM ingest_state "
+                "WHERE grain = 'delta' AND status = 'done'"
+            ).fetchone()
+        return {
+            "latestObservation": row[0].isoformat() if row and row[0] else None,
+            "lastSync": row[1].isoformat() if row and row[1] else None,
+        }
+    except Exception:
+        return {"latestObservation": None, "lastSync": None}
+
+
 @router.get("/api/meta")
 def meta():
     return {
@@ -27,6 +45,7 @@ def meta():
         "exportPageSize": settings.export_page_size,
         "maxExportRows": settings.export_max_rows,
         "catalogFilters": CATALOG_FILTERS,
+        "dataFreshness": _data_freshness(),
     }
 
 
