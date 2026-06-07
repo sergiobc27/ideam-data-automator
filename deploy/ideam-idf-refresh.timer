@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresco IDF: dia 2 de cada mes 03:30 (tras el delta)
+
+[Timer]
+OnCalendar=*-*-02 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresco mensual de curvas IDF (maximos anuales moviles)
+After=docker.service
+
+[Service]
+Type=oneshot
+Nice=18
+IOSchedulingClass=idle
+ExecStart=/usr/local/bin/ideam-idf-refresh.sh
