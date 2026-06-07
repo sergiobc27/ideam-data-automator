@@ -39,11 +39,10 @@ RETURNING hits, window_start
 
 
 def check_rate_limit(scope, ip, limit, window_seconds=3600):
-    """Limitador basado en Postgres (DEPRECADO).
-
-    Los routers ahora usan ``app.ratelimit.check_rate_limit`` (en memoria, sin
-    golpear la DB). Se conserva aquí por compatibilidad/datos históricos en la
-    tabla api_rate_limit, pero no se usa en el flujo de requests.
+    """Limitador basado en Postgres: atómico, compartido entre procesos y
+    persistente entre reinicios. Lo usa el scope 'export' (baja frecuencia,
+    tope que importa de verdad); las lecturas usan ``app.ratelimit`` en
+    memoria para no golpear la DB en cada panel.
 
     Devuelve (permitido, restantes, retry_after_seconds).
     """

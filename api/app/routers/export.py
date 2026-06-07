@@ -11,7 +11,7 @@ from psycopg.types.json import Jsonb
 from ..db import pool
 from ..models import CreateJobPayload, ExportPagePayload, QueryPayload
 from ..normalize import build_filters, normalize_label
-from ..ratelimit import check_rate_limit
+from ..db import check_rate_limit as check_rate_limit_pg
 from ..services import exporter
 from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..settings import settings
@@ -24,13 +24,18 @@ def _client_ip(request: Request):
 
 
 def _export_rate(request: Request):
-    ok, _remaining, retry = check_rate_limit(
+    # Contador en Postgres (atómico, compartido entre los 2 workers de uvicorn
+    # y sobrevive reinicios): en memoria el tope real era x2 y volátil
+    # (hallazgo de auditoría). Las lecturas siguen en memoria (frecuencia alta,
+    # costo de un 429 de menos = nulo).
+    ok, _remaining, retry = check_rate_limit_pg(
         "export", _client_ip(request), settings.rate_limit_export_per_hour
     )
     if not ok:
         raise HTTPException(
             429,
             f"Limite de exportaciones alcanzado. Intenta de nuevo en {max(retry // 60, 1)} minuto(s).",
+            headers={"Retry-After": str(max(retry, 60))},
         )
 
 

@@ -35,6 +35,7 @@ def analytics_rate(request: Request):
         raise HTTPException(
             429,
             f"Limite de consultas alcanzado. Intenta de nuevo en {max(retry // 60, 1)} minuto(s).",
+            headers={"Retry-After": str(max(retry, 60))},
         )
 
 

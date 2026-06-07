@@ -13,7 +13,29 @@ router = APIRouter()
 
 @router.get("/api/health")
 def health():
+    """Vive el proceso. NO toca la DB (ver /api/ready para salud profunda)."""
     return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}
+
+
+@router.get("/api/ready")
+def ready():
+    """Salud profunda: prueba la DB con timeout corto. El modo de fallo más
+    probable (pool agotado por exports o Postgres caído) pasaba invisible
+    porque /api/health responde 200 sin tocar la base (hallazgo de auditoría)."""
+    try:
+        with pool.connection(timeout=5) as conn:
+            conn.execute("SET LOCAL statement_timeout = '5s'")
+            conn.execute("SELECT 1").fetchone()
+    except Exception:
+        return JSONResponse(
+            {"ok": False, "error": "database"},
+            status_code=503,
+            headers={"cache-control": "no-store"},
+        )
+    return JSONResponse(
+        {"ok": True, "time": datetime.now(timezone.utc).isoformat()},
+        headers={"cache-control": "no-store"},
+    )
 
 
 def _data_freshness():

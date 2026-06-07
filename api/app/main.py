@@ -60,7 +60,7 @@ async def proxy_secret_guard(request: Request, call_next):
     /api/health). Antes 'fallaba abierto': sin la variable de entorno, la API
     quedaba sin autenticación.
     """
-    if request.url.path != "/api/health":
+    if request.url.path not in ("/api/health", "/api/ready"):
         secreto = settings.api_shared_secret
         if not secreto or request.headers.get("x-ideam-proxy-secret") != secreto:
             return JSONResponse({"error": "No autorizado."}, status_code=403)
@@ -75,7 +75,13 @@ async def http_exception_handler(_request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_handler(_request: Request, exc: RequestValidationError):
-    return JSONResponse({"error": f"Solicitud invalida: {exc.errors()[:2]}"}, status_code=400)
+    # Solo el CAMPO y el motivo, nunca el valor recibido (evita reflejar
+    # entradas del cliente en la respuesta — hallazgo de auditoría).
+    issues = [
+        f"{'.'.join(str(part) for part in err.get('loc', []) if part != 'body')}: {err.get('msg', 'invalido')}"
+        for err in exc.errors()[:3]
+    ]
+    return JSONResponse({"error": f"Solicitud invalida: {'; '.join(issues)}"}, status_code=400)
 
 
 @app.exception_handler(Exception)

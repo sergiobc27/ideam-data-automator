@@ -17,12 +17,18 @@ ping_hc() {  # $1=url $2=sufijo ('' exito, '/fail' fallo)
   [ -n "$1" ] && curl -fsS -m 10 --retry 2 -o /dev/null "$1$2" || true
 }
 
-# 1) API local sana?
-if curl -fsS -m 10 -o /dev/null http://127.0.0.1:8000/api/health; then
-  ping_hc "${HC_API_URL:-}" ""
-else
-  logger -t ideam-healthcheck "API local NO responde"
+# 1) API sana DE VERDAD: /api/ready prueba la DB (no solo el proceso) y
+#    ademas se verifica el camino publico completo (edge -> worker -> tunel),
+#    porque un tunel caido con API local viva pasaba invisible.
+PUBLIC_URL="${PUBLIC_HEALTH_URL:-https://ideam.sergiobc.com/api/health}"
+if ! curl -fsS -m 10 -o /dev/null http://127.0.0.1:8000/api/ready; then
+  logger -t ideam-healthcheck "API local /api/ready NO responde (DB o proceso)"
   ping_hc "${HC_API_URL:-}" "/fail"
+elif ! curl -fsS -m 15 -o /dev/null "$PUBLIC_URL"; then
+  logger -t ideam-healthcheck "camino publico caido (tunel/worker): $PUBLIC_URL"
+  ping_hc "${HC_API_URL:-}" "/fail"
+else
+  ping_hc "${HC_API_URL:-}" ""
 fi
 
 # 2) Disco bajo control? (alerta sobre 85%)
