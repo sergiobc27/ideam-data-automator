@@ -1,6 +1,14 @@
 """Endpoints de analítica/dashboard. Usan los continuous aggregates cuando los
 filtros lo permiten (dataset/departamento/municipio/estación) y la hypertable
-cruda cuando hay filtros finos (zona, nombre de estación)."""
+cruda cuando hay filtros finos (zona, nombre de estación).
+
+A diferencia de exports/preview, la analítica agregada permite consultas SIN
+departamentos (alcance nacional): corre sobre los caggs, donde el país entero
+del dataset más grande resuelve en <1s. Las vistas mensuales/anuales y los
+rankings usan obs_mensual (~24x más rápido que obs_diario a escala nacional);
+solo la serie diaria usa obs_diario y esa sí exige departamentos."""
+
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -47,23 +55,34 @@ _METRICS_RAW = {
 }
 
 
+def _bucket_date(value):
+    """Los caggs están alineados a UTC pero la sesión corre en America/Bogota:
+    .date() directo regresaría el día/mes/año ANTERIOR. Se convierte a UTC."""
+    return value.astimezone(timezone.utc).date()
+
+
 def _can_use_cagg(payload):
     filters = payload.catalogFilters or {}
     return not filters.get("hydrologicZones") and not filters.get("stationNames")
 
 
-def _cagg_filters(payload):
-    """WHERE/params equivalentes a build_filters pero sobre obs_diario."""
+def _cagg_filters(payload, time_col="dia"):
+    """WHERE/params equivalentes a build_filters pero sobre un cagg
+    (obs_diario con time_col='dia', obs_mensual con time_col='mes').
+    Sin departamentos = todo el país (permitido solo en analítica)."""
     from ..normalize import expand_station_codes, get_dataset
 
     dataset = get_dataset(payload.datasetId)
-    canonicals = validate_required_departments(payload.departments)
-    variants = set()
-    for canonical in canonicals:
-        variants.update(department_variants(canonical))
+    clauses = ["source_dataset_id = %(dataset_id)s"]
+    params = {"dataset_id": dataset["id"]}
 
-    clauses = ["source_dataset_id = %(dataset_id)s", "upper(departamento) = ANY(%(departments)s)"]
-    params = {"dataset_id": dataset["id"], "departments": sorted(variants)}
+    if payload.departments:
+        canonicals = validate_required_departments(payload.departments)
+        variants = set()
+        for canonical in canonicals:
+            variants.update(department_variants(canonical))
+        clauses.append("upper(departamento) = ANY(%(departments)s)")
+        params["departments"] = sorted(variants)
 
     filters = payload.catalogFilters or {}
     if filters.get("municipalities"):
@@ -73,10 +92,10 @@ def _cagg_filters(payload):
         clauses.append("codigoestacion = ANY(%(estaciones)s)")
         params["estaciones"] = expand_station_codes(filters["stations"])
     if payload.startDate:
-        clauses.append("dia >= %(start)s")
+        clauses.append(f"{time_col} >= %(start)s")
         params["start"] = payload.startDate
     if payload.endDate:
-        clauses.append("dia <= %(end)s")
+        clauses.append(f"{time_col} <= %(end)s")
         params["end"] = payload.endDate
     return " AND ".join(clauses), params, dataset
 
@@ -90,11 +109,21 @@ def timeseries(payload: TimeseriesPayload):
     bucket = _INTERVALS[payload.interval]
 
     if _can_use_cagg(payload):
-        where, params, dataset = _cagg_filters(payload)
+        # month/year salen de obs_mensual (rápido incluso a escala nacional);
+        # day necesita obs_diario y a nivel nacional sería demasiado pesado.
+        if payload.interval == "day":
+            if not payload.departments:
+                raise HTTPException(
+                    400, "La serie diaria requiere al menos un departamento; usa month o year para el país completo."
+                )
+            table, time_col = "obs_diario", "dia"
+        else:
+            table, time_col = "obs_mensual", "mes"
+        where, params, dataset = _cagg_filters(payload, time_col)
         metric_sql = _METRICS_CAGG[payload.metric]
         sql = (
-            f"SELECT time_bucket('{bucket}', dia) AS bucket, {metric_sql} AS value, "
-            "sum(n)::bigint AS n FROM obs_diario "
+            f"SELECT time_bucket('{bucket}', {time_col}) AS bucket, {metric_sql} AS value, "
+            f"sum(n)::bigint AS n FROM {table} "
             f"WHERE {where} GROUP BY bucket ORDER BY bucket"
         )
     else:
@@ -113,7 +142,7 @@ def timeseries(payload: TimeseriesPayload):
         "interval": payload.interval,
         "metric": payload.metric,
         "points": [
-            {"bucket": r[0].date().isoformat(), "value": float(r[1]) if r[1] is not None else None, "n": r[2]}
+            {"bucket": _bucket_date(r[0]).isoformat(), "value": float(r[1]) if r[1] is not None else None, "n": r[2]}
             for r in rows
         ],
     }
@@ -152,11 +181,11 @@ def summary_stats(payload: QueryPayload):
 
 @router.post("/by-region")
 def by_region(payload: QueryPayload):
-    where, params, dataset = _cagg_filters(payload)
+    where, params, dataset = _cagg_filters(payload, "mes")
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT departamento, sum(n)::bigint, sum(valor_sum) / nullif(sum(n_validos), 0), "
-            "count(DISTINCT codigoestacion) FROM obs_diario "
+            "count(DISTINCT codigoestacion) FROM obs_mensual "
             f"WHERE {where} GROUP BY departamento ORDER BY 2 DESC",
             params,
         ).fetchall()
@@ -171,11 +200,11 @@ def by_region(payload: QueryPayload):
 
 @router.post("/by-station")
 def by_station(payload: QueryPayload):
-    where, params, dataset = _cagg_filters(payload)
+    where, params, dataset = _cagg_filters(payload, "mes")
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT codigoestacion, max(municipio), max(departamento), sum(n)::bigint, "
-            "sum(valor_sum) / nullif(sum(n_validos), 0), min(dia), max(dia) FROM obs_diario "
+            "sum(valor_sum) / nullif(sum(n_validos), 0), min(mes), max(mes) FROM obs_mensual "
             f"WHERE {where} GROUP BY codigoestacion ORDER BY 4 DESC LIMIT 100",
             params,
         ).fetchall()
@@ -185,8 +214,8 @@ def by_station(payload: QueryPayload):
             {
                 "code": r[0], "municipality": r[1], "department": r[2], "rowCount": r[3],
                 "mean": float(r[4]) if r[4] is not None else None,
-                "firstObservation": r[5].date().isoformat() if r[5] else None,
-                "lastObservation": r[6].date().isoformat() if r[6] else None,
+                "firstObservation": _bucket_date(r[5]).isoformat() if r[5] else None,
+                "lastObservation": _bucket_date(r[6]).isoformat() if r[6] else None,
             }
             for r in rows
         ],
@@ -195,13 +224,13 @@ def by_station(payload: QueryPayload):
 
 @router.post("/monthly-climatology")
 def monthly_climatology(payload: QueryPayload):
-    where, params, dataset = _cagg_filters(payload)
+    where, params, dataset = _cagg_filters(payload, "mes")
     with pool.connection() as conn:
         rows = conn.execute(
-            "SELECT extract(month FROM dia)::int AS mes, "
+            "SELECT extract(month FROM (mes AT TIME ZONE 'UTC'))::int AS mes_num, "
             "sum(valor_sum) / nullif(sum(n_validos), 0) AS media, "
-            "min(valor_min), max(valor_max), sum(n)::bigint FROM obs_diario "
-            f"WHERE {where} GROUP BY mes ORDER BY mes",
+            "min(valor_min), max(valor_max), sum(n)::bigint FROM obs_mensual "
+            f"WHERE {where} GROUP BY mes_num ORDER BY mes_num",
             params,
         ).fetchall()
     return {
@@ -220,7 +249,7 @@ def datasets_overview():
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT source_dataset_id, sum(n)::bigint, count(DISTINCT codigoestacion), "
-            "min(dia), max(dia) FROM obs_diario GROUP BY 1"
+            "min(mes), max(mes) FROM obs_mensual GROUP BY 1"
         ).fetchall()
     stats = {r[0]: r for r in rows}
     overview = []
@@ -233,8 +262,8 @@ def datasets_overview():
                 "category": dataset["category"],
                 "rowCount": r[1] if r else 0,
                 "stationCount": r[2] if r else 0,
-                "firstObservation": r[3].date().isoformat() if r and r[3] else None,
-                "lastObservation": r[4].date().isoformat() if r and r[4] else None,
+                "firstObservation": _bucket_date(r[3]).isoformat() if r and r[3] else None,
+                "lastObservation": _bucket_date(r[4]).isoformat() if r and r[4] else None,
             }
         )
     return {"datasets": overview}

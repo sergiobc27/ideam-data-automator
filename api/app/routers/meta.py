@@ -62,6 +62,10 @@ def date_range(datasetId: str):
             (dataset["id"],),
         ).fetchone()
     start, end = row
+    # obs_diario está alineado a UTC; en la sesión (America/Bogota) .date()
+    # directo regresaría el día anterior en los bordes del rango.
+    start = start.astimezone(timezone.utc) if start else None
+    end = end.astimezone(timezone.utc) if end else None
     return {
         "datasetId": dataset["id"],
         "dateColumn": dataset["dateColumn"],
