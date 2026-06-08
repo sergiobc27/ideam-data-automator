@@ -261,3 +261,19 @@ def test_build_idf_vacio_si_sin_ajuste():
     by_duration = {10: [5, 5, 5], 30: [6, 6, 6]}  # n<5 y sin dispersión
     res = analytics.build_idf_curves(by_duration, [10, 30], (2, 5, 10))
     assert res["curves"] == []
+
+
+def test_aviso_plausibilidad_precip():
+    # Valores normales -> sin aviso.
+    assert analytics._aviso_plausibilidad_precip([45.0, 120.0, 300.0, None]) is None
+    # Un valor por encima del techo físico (~1800 mm) -> aviso.
+    aviso = analytics._aviso_plausibilidad_precip([45.0, 1984.9, 100.0])
+    assert aviso is not None and "1800" in aviso
+
+
+def test_build_idf_avisa_si_lamina_implausible():
+    # Lámina absurda en una duración -> el warning de plausibilidad aparece.
+    durations = [60, 120]
+    by_duration = {60: [2000.0 + i for i in range(25)], 120: [2100.0 + i for i in range(25)]}
+    res = analytics.build_idf_curves(by_duration, durations, (2, 5, 10))
+    assert any("récord mundial" in w for w in res["warnings"])

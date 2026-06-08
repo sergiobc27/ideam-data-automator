@@ -228,6 +228,22 @@ def monthly_climatology(payload: QueryPayload):
 
 _PRECIP_DATASET = "s54a-sgyg"
 _EULER_MASCHERONI = 0.5772156649015329
+# Techo físico para precipitación diaria: el récord mundial en 24 h es ~1825 mm
+# (Foc-Foc, Reunión, 1966). Un valor por encima es casi seguro un sentinel/error
+# de la fuente IDEAM; lo avisamos (NO lo borramos) porque contamina los ajustes.
+_MAX_PRECIP_DIARIA_MM = 1800.0
+
+
+def _aviso_plausibilidad_precip(valores):
+    """Devuelve un warning si algún valor de precipitación diaria (mm) supera el
+    techo físico (~récord mundial 24 h); None si todos son plausibles."""
+    if any(v is not None and v > _MAX_PRECIP_DIARIA_MM for v in valores):
+        return (
+            f"Hay valores de precipitación diaria por encima de {_MAX_PRECIP_DIARIA_MM:.0f} mm "
+            "(cercano al récord mundial en 24 h, ~1825 mm): posible dato anómalo de la fuente "
+            "IDEAM; revisa la serie antes de usar estos cuantiles."
+        )
+    return None
 
 
 def _require_single_station(payload):
@@ -331,6 +347,11 @@ def return_periods(payload: QueryPayload):
         warnings.append("Registro de menos de 30 años: usa con cautela los Tr altos (50-100 años).")
 
     payload_out = build_return_periods_payload(valid_years)
+    aviso = _aviso_plausibilidad_precip(
+        [y["maximum"] for y in valid_years] + [q["value"] for q in payload_out["quantiles"]]
+    )
+    if aviso:
+        warnings.append(aviso)
     payload_out["datasetId"] = payload.datasetId
     payload_out["warnings"] = warnings
     return payload_out
@@ -496,6 +517,10 @@ def build_idf_curves(by_duration, durations, return_periods):
                 f"Curvas IDF no monótonas; se unificó a {global_name} (mejor AIC agregado) "
                 f"para reducir inconsistencias, pero persisten irregularidades por la "
                 f"variabilidad del registro entre duraciones.")
+
+    aviso = _aviso_plausibilidad_precip([p["depthMm"] for c in curves for p in c["points"]])
+    if aviso:
+        warnings.append(aviso)
 
     return {"curves": curves, "fitSamples": samples, "chosenByDuration": chosen,
             "warnings": warnings}
