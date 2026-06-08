@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .. import hydrostats
+from .. import stationarity
 from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..catalog import DATASETS
 from ..db import pool
@@ -300,6 +301,7 @@ def build_return_periods_payload(valid_years, n_boot=1000):
                    "recomendación por AIC; bondad por Anderson-Darling y KS-Lilliefors "
                    "(bootstrap). La recomendación es un valor por defecto: el usuario "
                    "puede elegir cualquier distribución."),
+        "stationarityTests": stationarity.stationarity_report(maxima),
     }
 
 
@@ -347,6 +349,7 @@ def return_periods(payload: QueryPayload):
         warnings.append("Registro de menos de 30 años: usa con cautela los Tr altos (50-100 años).")
 
     payload_out = build_return_periods_payload(valid_years)
+    warnings.extend(payload_out["stationarityTests"]["warnings"])
     aviso = _aviso_plausibilidad_precip(
         [y["maximum"] for y in valid_years] + [q["value"] for q in payload_out["quantiles"]]
     )

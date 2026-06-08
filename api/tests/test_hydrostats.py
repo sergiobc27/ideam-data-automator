@@ -277,3 +277,14 @@ def test_build_idf_avisa_si_lamina_implausible():
     by_duration = {60: [2000.0 + i for i in range(25)], 120: [2100.0 + i for i in range(25)]}
     res = analytics.build_idf_curves(by_duration, durations, (2, 5, 10))
     assert any("récord mundial" in w for w in res["warnings"])
+
+
+def test_build_rp_incluye_stationarity_con_tendencia():
+    # 15 años estrictamente crecientes -> stationarityTests presente y tendencia.
+    vy = [{"year": 2000 + i, "maximum": float(20 + i), "days": 365} for i in range(15)]
+    out = analytics.build_return_periods_payload(vy, n_boot=120)
+    assert "stationarityTests" in out
+    rep = out["stationarityTests"]
+    assert rep["stationary"] is False
+    assert rep["trend"]["trend"] == "creciente"
+    assert any("Tendencia" in w for w in rep["warnings"])
