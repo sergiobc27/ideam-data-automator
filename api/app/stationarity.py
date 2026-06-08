@@ -98,3 +98,34 @@ def pettitt_test(values, alpha=0.05):
     return {"test": "Pettitt", "statistic": round(k, 2), "pValue": round(p, 4),
             "changePointIndex": best_t if significant else None,
             "passes": not significant}
+
+
+def stationarity_report(values, alpha=0.05):
+    """Corre las tres pruebas y resume. Con n<10 no son fiables: se omiten con
+    un único aviso. 'stationary' = las tres pasan. 'warnings' = frases legibles
+    por cada prueba que falla (para anexar al arreglo de avisos del endpoint)."""
+    n = len(values)
+    if n < 10:
+        return {"tooShort": True, "stationary": None, "independence": None,
+                "trend": None, "changePoint": None,
+                "warnings": ["Serie demasiado corta (<10 años) para pruebas de "
+                             "estacionariedad fiables."]}
+    ind = independence_test(values, alpha)
+    mk = mann_kendall_test(values, alpha)
+    pet = pettitt_test(values, alpha)
+    warnings = []
+    if not mk["passes"]:
+        warnings.append(
+            f"Tendencia {mk['trend']} detectada (Mann-Kendall, p={mk['pValue']}): los "
+            "períodos de retorno asumen estacionariedad — interpreta con cautela; "
+            "considera análisis no-estacionario.")
+    if not pet["passes"]:
+        warnings.append(
+            f"Posible cambio de régimen detectado (Pettitt, p={pet['pValue']}): la "
+            "serie podría no ser homogénea.")
+    if not ind["passes"]:
+        warnings.append(
+            "Los máximos anuales muestran correlación serial (lag-1): la suposición "
+            "de independencia podría no cumplirse.")
+    return {"tooShort": False, "stationary": ind["passes"] and mk["passes"] and pet["passes"],
+            "independence": ind, "trend": mk, "changePoint": pet, "warnings": warnings}

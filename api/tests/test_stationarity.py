@@ -69,3 +69,25 @@ def test_pettitt_homogenea_pasa():
     r = st.pettitt_test([50.0] * 12)
     assert r["changePointIndex"] is None
     assert r["passes"] is True
+
+
+def test_report_serie_corta():
+    r = st.stationarity_report([1, 2, 3, 4, 5])  # n<10
+    assert r["tooShort"] is True
+    assert r["stationary"] is None
+    assert any("corta" in w for w in r["warnings"])
+
+
+def test_report_constante_estacionaria():
+    r = st.stationarity_report([50.0] * 12)
+    assert r["tooShort"] is False
+    assert r["stationary"] is True
+    assert r["warnings"] == []
+
+
+def test_report_tendencia_no_estacionaria():
+    r = st.stationarity_report(list(range(1, 16)))  # creciente, n=15
+    assert r["stationary"] is False
+    assert any("Tendencia" in w for w in r["warnings"])
+    # los tres sub-bloques presentes
+    assert set(["independence", "trend", "changePoint"]).issubset(r)
