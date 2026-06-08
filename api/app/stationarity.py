@@ -29,3 +29,33 @@ def independence_test(values, alpha=0.05):
     p = min(1.0, max(0.0, 2.0 * (1.0 - _NORMAL.cdf(abs(z)))))
     return {"test": "Autocorrelación lag-1", "statistic": round(r1, 3),
             "pValue": round(p, 4), "passes": p >= alpha}
+
+
+def mann_kendall_test(values, alpha=0.05):
+    """Tendencia monótona (Mann-Kendall, no paramétrico). S con corrección por
+    empates; Z y p-valor por aproximación normal. passes=True si no hay
+    tendencia significativa."""
+    n = len(values)
+    s = 0
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            d = values[j] - values[i]
+            s += (d > 0) - (d < 0)
+    tie_term = sum(t * (t - 1) * (2 * t + 5) for t in Counter(values).values() if t > 1)
+    var = (n * (n - 1) * (2 * n + 5) - tie_term) / 18.0
+    if var <= 0:
+        return {"test": "Mann-Kendall", "statistic": s, "z": 0.0, "pValue": 1.0,
+                "trend": "sin tendencia", "passes": True}
+    if s > 0:
+        z = (s - 1) / math.sqrt(var)
+    elif s < 0:
+        z = (s + 1) / math.sqrt(var)
+    else:
+        z = 0.0
+    p = min(1.0, max(0.0, 2.0 * (1.0 - _NORMAL.cdf(abs(z)))))
+    if p < alpha:
+        trend = "creciente" if s > 0 else "decreciente"
+    else:
+        trend = "sin tendencia"
+    return {"test": "Mann-Kendall", "statistic": s, "z": round(z, 3), "pValue": round(p, 4),
+            "trend": trend, "passes": trend == "sin tendencia"}
