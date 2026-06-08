@@ -15,6 +15,7 @@ from datetime import timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .. import hydrostats
 from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..catalog import DATASETS
 from ..db import pool
@@ -235,6 +236,57 @@ def _require_single_station(payload):
         raise HTTPException(400, "Selecciona exactamente una estación para este análisis.")
 
 
+def build_return_periods_payload(valid_years, n_boot=1000):
+    """Arma el cuerpo de /return-periods desde los años válidos.
+
+    Contrato ADITIVO y no-rompedor: 'quantiles' y 'goodnessOfFit' reflejan la
+    distribución RECOMENDADA por AIC; 'gumbel {mu,beta}' se sigue calculando
+    siempre (continuidad de la web actual). Se agregan 'recommended' y
+    'distributions[]' con las tres candidatas autocontenidas, para que el
+    usuario pueda elegir cualquiera sin recálculo."""
+    maxima = [y["maximum"] for y in valid_years]
+    g = hydrostats.fit_gumbel(maxima) if len(maxima) >= 4 else None
+    gumbel = ({"mu": round(g["params"]["mu"], 2), "beta": round(g["params"]["beta"], 2)}
+              if g else None)
+    fit = hydrostats.fit_all(maxima, goodness=True, n_boot=n_boot) if len(maxima) >= 5 else \
+        {"recommended": None, "distributions": []}
+
+    rec_name = fit["recommended"]
+    rec = next((d for d in fit["distributions"] if d["name"] == rec_name), None)
+    quantiles = rec["quantiles"] if rec else []
+    # goodnessOfFit de nivel superior = KS-Lilliefors de la recomendada, con la
+    # MISMA forma que consume la web hoy (test/statistic/critical/alpha/passes).
+    gof = None
+    if rec and rec.get("goodnessOfFit") and rec["goodnessOfFit"].get("ks"):
+        ks = rec["goodnessOfFit"]["ks"]
+        gof = {"test": "Kolmogorov-Smirnov (Lilliefors, bootstrap)",
+               "statistic": ks["statistic"], "critical": ks["critical"],
+               "alpha": ks["alpha"], "passes": ks["passes"], "pValue": ks["pValue"]}
+
+    # Posiciones de Weibull (graficar) — igual que antes.
+    ranked = sorted(maxima, reverse=True)
+    n = len(maxima)
+    empirical = [{"returnPeriod": round((n + 1) / (rank + 1), 2), "value": value}
+                 for rank, value in enumerate(ranked)]
+
+    return {
+        "stationYears": valid_years,
+        "n": n,
+        "mean": round(statistics.fmean(maxima), 1) if maxima else None,
+        "std": round(statistics.stdev(maxima), 1) if n >= 2 else None,
+        "gumbel": gumbel,
+        "quantiles": quantiles,
+        "empirical": empirical,
+        "goodnessOfFit": gof,
+        "recommended": rec_name,
+        "distributions": fit["distributions"],
+        "method": ("Ajuste de Gumbel, GEV y Log-Pearson III sobre máximos anuales; "
+                   "recomendación por AIC; bondad por Anderson-Darling y KS-Lilliefors "
+                   "(bootstrap). La recomendación es un valor por defecto: el usuario "
+                   "puede elegir cualquier distribución."),
+    }
+
+
 @router.post("/return-periods")
 def return_periods(payload: QueryPayload):
     """Períodos de retorno de la precipitación máxima diaria anual.
@@ -279,39 +331,10 @@ def return_periods(payload: QueryPayload):
     elif n < 30:
         warnings.append("Registro de menos de 30 años: usa con cautela los Tr altos (50-100 años).")
 
-    if n < 5:
-        return {"stationYears": valid_years, "n": n, "warnings": warnings, "gumbel": None, "quantiles": [], "empirical": []}
-
-    maxima = [y["maximum"] for y in valid_years]
-    mean = statistics.fmean(maxima)
-    std = statistics.stdev(maxima)
-    beta = std * math.sqrt(6) / math.pi
-    mu = mean - _EULER_MASCHERONI * beta
-
-    quantiles = [
-        {"returnPeriod": t, "value": round(mu - beta * math.log(-math.log(1 - 1 / t)), 1)}
-        for t in (2, 5, 10, 25, 50, 100)
-    ]
-    # Posiciones de Weibull sobre los máximos observados (para graficar).
-    ranked = sorted(maxima, reverse=True)
-    empirical = [
-        {"returnPeriod": round((n + 1) / (rank + 1), 2), "value": value}
-        for rank, value in enumerate(ranked)
-    ]
-
-    return {
-        "datasetId": payload.datasetId,
-        "stationYears": valid_years,
-        "n": n,
-        "mean": round(mean, 1),
-        "std": round(std, 1),
-        "gumbel": {"mu": round(mu, 2), "beta": round(beta, 2)},
-        "quantiles": quantiles,
-        "empirical": empirical,
-        "goodnessOfFit": _gumbel_ks_test(maxima, mu, beta),
-        "warnings": warnings,
-        "method": "Gumbel por método de momentos sobre máximos anuales de precipitación diaria",
-    }
+    payload_out = build_return_periods_payload(valid_years)
+    payload_out["datasetId"] = payload.datasetId
+    payload_out["warnings"] = warnings
+    return payload_out
 
 
 _IDF_RETURN_PERIODS = (2, 5, 10, 25, 50, 100)

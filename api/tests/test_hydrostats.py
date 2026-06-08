@@ -213,3 +213,29 @@ def test_fit_all_goodness_agrega_bloque():
     data = [12, 18, 25, 31, 40, 22, 28, 55, 33, 47, 19, 61]
     out = hs.fit_all(data, goodness=True, n_boot=150)
     assert "goodnessOfFit" in out["distributions"][0]
+
+
+from app.routers import analytics
+
+
+def test_build_rp_payload_contrato_no_rompedor():
+    valid_years = [{"year": 2000 + i, "maximum": v, "days": 365}
+                   for i, v in enumerate([45, 60, 52, 71, 48, 90, 55, 63, 58, 77,
+                                          49, 66, 81, 53, 70, 59, 62, 88, 51, 74])]
+    out = analytics.build_return_periods_payload(valid_years, n_boot=150)
+    # Campos NO-ROMPEDORES presentes y con la forma actual:
+    assert out["gumbel"] is not None and {"mu", "beta"} <= set(out["gumbel"])
+    assert [q["returnPeriod"] for q in out["quantiles"]] == [2, 5, 10, 25, 50, 100]
+    assert {"test", "statistic", "critical", "alpha", "passes"} <= set(out["goodnessOfFit"])
+    # Campos NUEVOS:
+    assert out["recommended"] in {"Gumbel", "GEV", "LogPearsonIII"}
+    assert len(out["distributions"]) >= 1
+    # quantiles de nivel superior == los de la recomendada
+    rec = next(d for d in out["distributions"] if d["name"] == out["recommended"])
+    assert out["quantiles"] == rec["quantiles"]
+
+
+def test_build_rp_payload_pocos_anios():
+    out = analytics.build_return_periods_payload([{"year": 2000, "maximum": 5, "days": 365}])
+    assert out["recommended"] is None
+    assert out["quantiles"] == [] and out["distributions"] == []
