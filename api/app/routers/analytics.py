@@ -525,8 +525,18 @@ def build_idf_curves(by_duration, durations, return_periods):
     if aviso:
         warnings.append(aviso)
 
+    summary = None
+    serie_1440 = by_duration.get(1440)
+    if serie_1440 and len(serie_1440) >= 10:
+        summary = stationarity.stationarity_report(serie_1440)
+        if summary["stationary"] is False:
+            warnings.append(
+                "La serie diaria (1440 min) de esta estación no parece estacionaria "
+                "(tendencia o cambio de régimen); las curvas IDF asumen estacionariedad "
+                "— interpreta con cautela.")
+
     return {"curves": curves, "fitSamples": samples, "chosenByDuration": chosen,
-            "warnings": warnings}
+            "warnings": warnings, "stationaritySummary": summary}
 
 
 @router.post("/idf")
@@ -613,6 +623,7 @@ def idf(payload: QueryPayload):
         "returnPeriods": list(_IDF_RETURN_PERIODS),
         "curves": curves,
         "chosenByDuration": built["chosenByDuration"],
+        "stationaritySummary": built["stationaritySummary"],
         "equation": _fit_idf_equation(fit_samples),
         "warnings": warnings,
         "method": (

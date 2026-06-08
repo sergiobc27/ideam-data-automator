@@ -288,3 +288,26 @@ def test_build_rp_incluye_stationarity_con_tendencia():
     assert rep["stationary"] is False
     assert rep["trend"]["trend"] == "creciente"
     assert any("Tendencia" in w for w in rep["warnings"])
+
+
+def test_build_idf_incluye_stationarity_summary_1440():
+    # by_duration con clave 1440 con 12 años crecientes -> resumen con tendencia.
+    durations = [60, 1440]
+    by_duration = {
+        60: [30.0 + i for i in range(12)],
+        1440: [80.0 + 5 * i for i in range(12)],  # creciente
+    }
+    res = analytics.build_idf_curves(by_duration, durations, (2, 5, 10))
+    assert "stationaritySummary" in res
+    assert res["stationaritySummary"] is not None
+    assert res["stationaritySummary"]["trend"]["trend"] == "creciente"
+    assert any("estacionaria" in w for w in res["warnings"])
+
+
+def test_build_idf_sin_1440_summary_none():
+    # Sin duración 1440 -> summary None, sin warning de estacionariedad.
+    durations = [10, 30, 60, 120, 360]
+    base = {10: 12, 30: 22, 60: 33, 120: 45, 360: 70}
+    by_duration = {d: [base[d] * (0.8 + 0.02 * i) for i in range(25)] for d in durations}
+    res = analytics.build_idf_curves(by_duration, durations, (2, 5, 10, 25, 50, 100))
+    assert res["stationaritySummary"] is None
