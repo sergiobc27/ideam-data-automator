@@ -180,3 +180,36 @@ def test_bootstrap_reproducible_mismo_resultado():
     r1 = hs._bootstrap_goodness("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=200)
     r2 = hs._bootstrap_goodness("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=200)
     assert r1 == r2  # semilla derivada de los datos -> determinista
+
+
+def test_fit_all_pocos_datos_vacio():
+    out = hs.fit_all([10, 20, 30], goodness=False)
+    assert out == {"recommended": None, "distributions": []}
+
+
+def test_fit_all_recomienda_la_correcta():
+    # Datos generados de una GEV clara con cola (shape positivo): la
+    # recomendada por AIC debe ser GEV (no Gumbel, que subestima la cola).
+    loc, scale, k, n = 50.0, 12.0, 0.25, 250
+    data = [loc + (scale / k) * (1 - (-math.log((i - 0.5) / n)) ** k) for i in range(1, n + 1)]
+    out = hs.fit_all(data, goodness=False)
+    assert out["recommended"] == "GEV"
+    names = [d["name"] for d in out["distributions"]]
+    assert names[0] == "GEV"  # ordenadas por AIC ascendente
+
+
+def test_fit_all_candidatas_autocontenidas():
+    data = [12, 18, 25, 31, 40, 22, 28, 55, 33, 47, 19, 61]
+    out = hs.fit_all(data, goodness=False)
+    for d in out["distributions"]:
+        assert set(d) >= {"name", "k", "params", "logLik", "aic", "quantiles"}
+        trs = [q["returnPeriod"] for q in d["quantiles"]]
+        assert trs == [2, 5, 10, 25, 50, 100]
+        vals = [q["value"] for q in d["quantiles"]]
+        assert vals == sorted(vals)  # cuantiles monótonos por Tr
+
+
+def test_fit_all_goodness_agrega_bloque():
+    data = [12, 18, 25, 31, 40, 22, 28, 55, 33, 47, 19, 61]
+    out = hs.fit_all(data, goodness=True, n_boot=150)
+    assert "goodnessOfFit" in out["distributions"][0]

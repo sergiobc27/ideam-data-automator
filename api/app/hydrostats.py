@@ -338,3 +338,44 @@ def _bootstrap_goodness(name, params, data, fit_fn, n_boot=1000, alpha=0.05):
                 "pValue": round(pval, 4), "alpha": alpha, "passes": bool(obs < crit)}
 
     return {"andersonDarling": summarize(obs_ad, ad_null), "ks": summarize(obs_ks, ks_null)}
+
+
+RETURN_PERIODS = (2, 5, 10, 25, 50, 100)
+_FITTERS = (("Gumbel", fit_gumbel, 2), ("GEV", fit_gev, 3), ("LogPearsonIII", fit_lp3, 3))
+
+
+def fit_all(maxima, return_periods=RETURN_PERIODS, goodness=True, n_boot=1000):
+    """Ajusta Gumbel, GEV y LP3; descarta las degeneradas; ordena por AIC y
+    marca la recomendada (menor AIC). Cada candidata es autocontenida
+    (params, logLik, aic, cuantiles por Tr, y bondad si goodness=True)."""
+    candidates = []
+    for name, fit_fn, k in _FITTERS:
+        fitted = fit_fn(maxima)
+        if fitted is None:
+            continue
+        params = fitted["params"]
+        a, ll = aic(name, params, maxima, k)
+        if not math.isfinite(a):
+            continue
+        quantiles, ok = [], True
+        for t in return_periods:
+            q = dist_quantile(name, params, 1.0 - 1.0 / t)
+            if not math.isfinite(q) or q < 0:
+                ok = False
+                break
+            quantiles.append({"returnPeriod": t, "value": round(q, 1)})
+        if not ok:
+            continue
+        cand = {
+            "name": name, "k": k,
+            "params": {kk: round(vv, 4) for kk, vv in params.items()},
+            "logLik": round(ll, 3), "aic": round(a, 3), "quantiles": quantiles,
+        }
+        if goodness:
+            cand["goodnessOfFit"] = _bootstrap_goodness(name, params, maxima, fit_fn, n_boot)
+        candidates.append((a, cand))
+    if not candidates:
+        return {"recommended": None, "distributions": []}
+    candidates.sort(key=lambda c: c[0])
+    dists = [c[1] for c in candidates]
+    return {"recommended": dists[0]["name"], "distributions": dists}
