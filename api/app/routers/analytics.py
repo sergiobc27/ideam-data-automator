@@ -511,6 +511,135 @@ def idf(payload: QueryPayload):
     }
 
 
+@router.get("/idf-stations")
+def idf_stations():
+    """Estaciones con curvas IDF USABLES (>=5 años válidos ya precomputados).
+
+    El cálculo IDF es por estación y solo una parte de la red lo tiene listo
+    (estaciones pluviográficas con registro suficiente; el resto está en cola o
+    no es apto). Sin esta lista, el usuario tendría que adivinar qué código
+    consultar y casi siempre caería en "no disponible". Aquí devolvemos las que
+    SÍ están listas, con su metadata, para poblar el selector de Hidrología.
+
+    El ltrim(...,'0') reconcilia el formato del código entre idf_estado y
+    estaciones (ceros a la izquierda; misma razón que expand_station_codes). El
+    umbral 5 coincide con el mínimo que exige el endpoint /idf para ajustar
+    Gumbel y emitir curvas."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT ON (ltrim(s.codigoestacion, '0')) "
+            "       e.codigoestacion, e.nombre, e.municipio, e.departamento_norm, s.anios_validos "
+            "FROM idf_estado s "
+            "JOIN estaciones e ON ltrim(e.codigoestacion, '0') = ltrim(s.codigoestacion, '0') "
+            "WHERE s.anios_validos >= 5 "
+            "ORDER BY ltrim(s.codigoestacion, '0'), e.codigoestacion"
+        ).fetchall()
+    stations = [
+        {
+            "codigo": r[0],
+            "nombre": r[1] or r[0],
+            "municipio": r[2] or "N/D",
+            "departamento": r[3] or "N/D",
+            "aniosValidos": r[4],
+        }
+        for r in rows
+    ]
+    stations.sort(key=lambda s: (s["departamento"], s["municipio"], s["nombre"]))
+    # La lista crece a medida que el batch precomputa más estaciones; 30 min de
+    # cache en el borde es buen balance entre frescura y carga.
+    return JSONResponse(
+        {"stations": stations, "count": len(stations)},
+        headers={"cache-control": "public, max-age=1800, stale-while-revalidate=1800"},
+    )
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    r = 6371.0  # radio medio terrestre (km)
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+@router.get("/idf-nearest")
+def idf_nearest(departamento: str = "", municipio: str = ""):
+    """Sugiere la(s) estación(es) con IDF disponible MÁS CERCANAS a un municipio.
+
+    Pensado para quien no sabe qué estación elegir: dado un municipio, ubica su
+    centro (centroide de las estaciones IDEAM de ese municipio, única fuente de
+    coordenadas) y rankea por distancia las estaciones con análisis disponible
+    (idf_estado.anios_validos >= 5). Devuelve la distancia en km para que el
+    usuario juzgue la representatividad (a más distancia / terreno distinto,
+    menos). Las curvas IDF siguen siendo de punto: esto solo recomienda cuál."""
+    from ..normalize import canonical_department, department_variants
+
+    municipio = (municipio or "").strip()
+    if not municipio:
+        raise HTTPException(400, "Indica un municipio.")
+    canonical = canonical_department(departamento) if departamento else None
+    variants = [v.upper() for v in department_variants(canonical)] if canonical else []
+
+    with pool.connection() as conn:
+        # Centro del municipio = promedio de coordenadas de SUS estaciones.
+        # Match insensible a may/min Y a tildes (translate): el municipio del
+        # dropdown viene de mv_catalogo y el centroide se calcula en estaciones;
+        # si difieren en una tilde, igual debe casar.
+        mun_norm = "translate(upper(municipio), 'ÁÉÍÓÚÜÑ', 'AEIOUUN')"
+        where = (
+            f"{mun_norm} = translate(upper(%(mun)s), 'ÁÉÍÓÚÜÑ', 'AEIOUUN') "
+            "AND latitud BETWEEN -5 AND 14 AND longitud BETWEEN -82 AND -66"
+        )
+        params = {"mun": municipio}
+        if variants:
+            where += " AND upper(departamento_norm) = ANY(%(dep)s)"
+            params["dep"] = variants
+        # avg(altitud) = altura media del municipio, para la Δaltitud (en zona de
+        # montaña pesa más que la distancia horizontal: distinto piso térmico).
+        loc = conn.execute(
+            f"SELECT avg(latitud), avg(longitud), count(*), avg(altitud) FROM estaciones WHERE {where}",
+            params,
+        ).fetchone()
+        if not loc or not loc[2] or loc[0] is None:
+            return {
+                "located": False, "municipio": municipio, "departamento": departamento, "stations": [],
+                "message": "No pudimos ubicar ese municipio en el catálogo; usa la lista de estaciones.",
+            }
+        clat, clon = float(loc[0]), float(loc[1])
+        calt = float(loc[3]) if loc[3] is not None else None
+        rows = conn.execute(
+            "SELECT DISTINCT ON (ltrim(s.codigoestacion, '0')) "
+            "       e.codigoestacion, e.nombre, e.municipio, e.departamento_norm, "
+            "       e.latitud, e.longitud, e.altitud, s.anios_validos "
+            "FROM idf_estado s "
+            "JOIN estaciones e ON ltrim(e.codigoestacion, '0') = ltrim(s.codigoestacion, '0') "
+            "WHERE s.anios_validos >= 5 "
+            "AND e.latitud BETWEEN -5 AND 14 AND e.longitud BETWEEN -82 AND -66 "
+            "ORDER BY ltrim(s.codigoestacion, '0'), e.codigoestacion"
+        ).fetchall()
+
+    ranked = []
+    for r in rows:
+        d = _haversine_km(clat, clon, float(r[4]), float(r[5]))
+        st_alt = float(r[6]) if r[6] is not None else None
+        alt_diff = round(st_alt - calt) if (st_alt is not None and calt is not None) else None
+        ranked.append({
+            "codigo": r[0],
+            "nombre": r[1] or r[0],
+            "municipio": r[2] or "N/D",
+            "departamento": r[3] or "N/D",
+            "aniosValidos": r[7],
+            "distanceKm": round(d, 1),
+            "altDiffM": alt_diff,
+            "sameMunicipio": (r[2] or "").strip().upper() == municipio.upper(),
+        })
+    ranked.sort(key=lambda x: x["distanceKm"])
+    return JSONResponse(
+        {"located": True, "municipio": municipio, "departamento": departamento, "stations": ranked[:5]},
+        headers={"cache-control": "public, max-age=1800, stale-while-revalidate=1800"},
+    )
+
+
 _SPI_CATEGORIES = [
     (-2.0, "Sequía extrema"),
     (-1.5, "Sequía severa"),
