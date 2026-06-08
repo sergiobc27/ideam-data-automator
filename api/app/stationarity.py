@@ -59,3 +59,42 @@ def mann_kendall_test(values, alpha=0.05):
         trend = "sin tendencia"
     return {"test": "Mann-Kendall", "statistic": s, "z": round(z, 3), "pValue": round(p, 4),
             "trend": trend, "passes": trend == "sin tendencia"}
+
+
+def _average_ranks(values):
+    """Rangos 1-based con promedio en empates."""
+    n = len(values)
+    order = sorted(range(n), key=lambda i: values[i])
+    ranks = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0  # promedio de los rangos (i+1)..(j+1)
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def pettitt_test(values, alpha=0.05):
+    """Punto de cambio (Pettitt, no paramétrico) vía la forma de rangos
+    U_t = 2*sum(rangos[:t]) - t*(n+1). K=max|U_t|; p≈2*exp(-6K^2/(n^3+n^2)).
+    passes=True si NO hay cambio significativo. changePointIndex = nº de datos
+    en el primer segmento (1..n-1) si es significativo, si no None."""
+    n = len(values)
+    ranks = _average_ranks(values)
+    cum = 0.0
+    best_abs, best_t = -1.0, 0
+    for t in range(1, n):  # tamaño del primer segmento
+        cum += ranks[t - 1]
+        u = 2.0 * cum - t * (n + 1)
+        if abs(u) > best_abs:
+            best_abs, best_t = abs(u), t
+    k = best_abs
+    p = min(1.0, max(0.0, 2.0 * math.exp(-6.0 * k * k / (n ** 3 + n ** 2))))
+    significant = p < alpha
+    return {"test": "Pettitt", "statistic": round(k, 2), "pValue": round(p, 4),
+            "changePointIndex": best_t if significant else None,
+            "passes": not significant}

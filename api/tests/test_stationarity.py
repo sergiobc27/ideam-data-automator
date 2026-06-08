@@ -46,3 +46,26 @@ def test_mk_constante_sin_tendencia():
     r = st.mann_kendall_test([50.0] * 12)
     assert r["trend"] == "sin tendencia"
     assert r["passes"] is True
+
+
+def test_average_ranks_sin_empates():
+    assert st._average_ranks([10, 30, 20]) == [1.0, 3.0, 2.0]
+
+
+def test_average_ranks_con_empates():
+    assert st._average_ranks([10, 10, 20]) == [1.5, 1.5, 3.0]
+
+
+def test_pettitt_detecta_salto():
+    # Diez 10 seguidos de diez 100: cambio tras la posición 10.
+    serie = [10.0] * 10 + [100.0] * 10
+    r = st.pettitt_test(serie)
+    assert r["test"] == "Pettitt"
+    assert r["changePointIndex"] == 10
+    assert r["passes"] is False
+
+
+def test_pettitt_homogenea_pasa():
+    r = st.pettitt_test([50.0] * 12)
+    assert r["changePointIndex"] is None
+    assert r["passes"] is True
