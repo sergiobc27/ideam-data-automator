@@ -61,3 +61,53 @@ def pdf_gumbel(x, mu, beta):
 
 def cdf_gumbel(x, mu, beta):
     return math.exp(-math.exp(-(x - mu) / beta))
+
+
+def fit_gev(maxima):
+    """GEV por L-momentos (aproximación de Hosking). Parametrización:
+    x(p) = loc + (scale/k)*(1 - (-ln p)^k); k = forma (shape)."""
+    lm = l_moments(maxima)
+    if lm is None:
+        return None
+    l1, l2, t3, _t4 = lm
+    c = 2.0 / (3.0 + t3) - math.log(2.0) / math.log(3.0)
+    k = 7.8590 * c + 2.9554 * c * c
+    if abs(k) < 1e-6:  # límite Gumbel
+        g = fit_gumbel(maxima)
+        if g is None:
+            return None
+        p = g["params"]
+        return {"name": "GEV", "k": 3, "params": {"loc": p["mu"], "scale": p["beta"], "shape": 0.0}}
+    gam = math.gamma(1.0 + k)
+    denom = (1.0 - 2.0 ** (-k)) * gam
+    if denom == 0:
+        return None
+    scale = l2 * k / denom
+    if scale <= 0:
+        return None
+    loc = l1 - scale * (1.0 - gam) / k
+    return {"name": "GEV", "k": 3, "params": {"loc": loc, "scale": scale, "shape": k}}
+
+
+def quantile_gev(p, loc, scale, shape):
+    if abs(shape) < 1e-6:
+        return loc - scale * math.log(-math.log(p))
+    return loc + (scale / shape) * (1.0 - (-math.log(p)) ** shape)
+
+
+def pdf_gev(x, loc, scale, shape):
+    if abs(shape) < 1e-6:
+        return pdf_gumbel(x, loc, scale)
+    y = 1.0 - shape * (x - loc) / scale
+    if y <= 0:
+        return 0.0
+    return (y ** (1.0 / shape - 1.0)) * math.exp(-(y ** (1.0 / shape))) / scale
+
+
+def cdf_gev(x, loc, scale, shape):
+    if abs(shape) < 1e-6:
+        return cdf_gumbel(x, loc, scale)
+    y = 1.0 - shape * (x - loc) / scale
+    if y <= 0:
+        return 1.0 if shape > 0 else 0.0  # k>0: por encima de la cota superior
+    return math.exp(-(y ** (1.0 / shape)))

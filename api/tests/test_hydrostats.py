@@ -50,3 +50,30 @@ def test_gumbel_pdf_cdf_coherentes():
     xs = [mu - 60 + i * 0.5 for i in range(int(120 / 0.5))]
     area = sum(hs.pdf_gumbel(x, mu, beta) * 0.5 for x in xs)
     assert abs(area - 1.0) < 0.02
+
+
+def test_fit_gev_recupera_shape():
+    # Datos del cuantil GEV exacto (Hosking) con loc=50, scale=10, shape k=0.15.
+    loc, scale, k, n = 50.0, 10.0, 0.15, 300
+    data = [loc + (scale / k) * (1 - (-math.log((i - 0.5) / n)) ** k) for i in range(1, n + 1)]
+    g = hs.fit_gev(data)
+    assert g["name"] == "GEV" and g["k"] == 3
+    assert abs(g["params"]["shape"] - k) < 0.05
+    assert abs(g["params"]["loc"] - loc) < 2.0
+    assert abs(g["params"]["scale"] - scale) < 2.0
+
+
+def test_gev_quantile_monotonia_y_limite_gumbel():
+    # shape ~ 0 debe coincidir con Gumbel.
+    q_gev = hs.quantile_gev(1 - 1 / 100, 30.0, 10.0, 0.0)
+    q_gum = hs.quantile_gumbel(1 - 1 / 100, 30.0, 10.0)
+    assert abs(q_gev - q_gum) < 1e-9
+    qs = [hs.quantile_gev(1 - 1 / t, 50.0, 10.0, 0.15) for t in (2, 5, 10, 50, 100)]
+    assert qs == sorted(qs)
+
+
+def test_gev_cdf_fuera_de_soporte():
+    # shape>0: cota superior loc + scale/shape -> por encima, CDF=1.
+    loc, scale, shape = 50.0, 10.0, 0.2
+    upper = loc + scale / shape
+    assert hs.cdf_gev(upper + 5, loc, scale, shape) == 1.0
