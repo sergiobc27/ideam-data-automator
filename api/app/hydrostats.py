@@ -268,3 +268,73 @@ def aic(name, params, data, k):
     if not math.isfinite(ll):
         return float("inf"), ll
     return 2 * k - 2 * ll, ll
+
+
+def ad_statistic(name, params, data):
+    """Anderson-Darling A^2 (pondera colas) contra la CDF ajustada."""
+    x = sorted(data)
+    n = len(x)
+    s = 0.0
+    for i, xi in enumerate(x, start=1):
+        u = min(max(dist_cdf(name, params, xi), 1e-12), 1 - 1e-12)
+        u_comp = min(max(dist_cdf(name, params, x[n - i]), 1e-12), 1 - 1e-12)
+        s += (2 * i - 1) * (math.log(u) + math.log(1 - u_comp))
+    return -n - s / n
+
+
+def ks_statistic(name, params, data):
+    """Kolmogorov-Smirnov D contra la CDF ajustada."""
+    x = sorted(data)
+    n = len(x)
+    d = 0.0
+    for i, xi in enumerate(x, start=1):
+        u = dist_cdf(name, params, xi)
+        d = max(d, i / n - u, u - (i - 1) / n)
+    return d
+
+
+def dist_sample(name, params, rng):
+    """Una observación simulada de la distribución (para el bootstrap)."""
+    if name == "LogPearsonIII":
+        my, sy, g = params["meanLog"], params["stdLog"], params["skewLog"]
+        if abs(g) < 1e-3:
+            y = rng.gauss(my, sy)
+        else:
+            alpha, beta, xi = _pe3_params(my, sy, g)
+            y = xi + beta * rng.gammavariate(alpha, 1.0)
+        return 10.0 ** y
+    u = rng.random()
+    return dist_quantile(name, params, u)
+
+
+def _bootstrap_goodness(name, params, data, fit_fn, n_boot=1000, alpha=0.05):
+    """Valores críticos y p-valor de AD y KS por bootstrap paramétrico
+    (Lilliefors generalizado: contempla que los parámetros se estimaron de la
+    muestra). Semilla derivada de los datos -> reproducible entre corridas."""
+    n = len(data)
+    obs_ad = ad_statistic(name, params, data)
+    obs_ks = ks_statistic(name, params, data)
+    seed = (n * 1000003 + int(round(sum(data) * 100))) % (2 ** 31)
+    rng = random.Random(seed)
+    ad_null, ks_null = [], []
+    for _ in range(n_boot):
+        sample = [dist_sample(name, params, rng) for _ in range(n)]
+        refit = fit_fn(sample)
+        if refit is None:
+            continue
+        rp = refit["params"]
+        ad_null.append(ad_statistic(name, rp, sample))
+        ks_null.append(ks_statistic(name, rp, sample))
+
+    def summarize(obs, null):
+        if not null:
+            return None
+        null_sorted = sorted(null)
+        m = len(null_sorted)
+        idx = min(m - 1, int(math.ceil((1 - alpha) * m)) - 1)
+        crit = null_sorted[idx]
+        pval = sum(1 for v in null if v >= obs) / m
+        return {"statistic": round(obs, 4), "critical": round(crit, 4),
+                "pValue": round(pval, 4), "alpha": alpha, "passes": bool(obs < crit)}
+
+    return {"andersonDarling": summarize(obs_ad, ad_null), "ks": summarize(obs_ks, ks_null)}

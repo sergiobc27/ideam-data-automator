@@ -144,3 +144,39 @@ def test_loglik_menos_inf_fuera_de_soporte():
     params = {"loc": 50.0, "scale": 10.0, "shape": 0.3}
     data = [48, 49, 50, 51, 200]  # 200 supera la cota superior
     assert hs.loglik("GEV", params, data) == float("-inf")
+
+
+def test_ad_ks_statistics_no_negativos():
+    data = [12, 18, 25, 31, 40, 22, 28, 55, 33, 47]
+    g = hs.fit_gumbel(data)
+    assert hs.ad_statistic("Gumbel", g["params"], data) >= 0
+    d = hs.ks_statistic("Gumbel", g["params"], data)
+    assert 0 <= d <= 1
+
+
+def test_dist_sample_reproducible():
+    # Mismo seed -> misma muestra (clave para reproducibilidad de la tesis).
+    rng1 = __import__("random").Random(123)
+    rng2 = __import__("random").Random(123)
+    p = {"mu": 30.0, "beta": 10.0}
+    s1 = [hs.dist_sample("Gumbel", p, rng1) for _ in range(20)]
+    s2 = [hs.dist_sample("Gumbel", p, rng2) for _ in range(20)]
+    assert s1 == s2
+
+
+def test_bootstrap_acepta_serie_de_la_dist():
+    # Serie generada por la propia Gumbel ajustada: NO debe rechazarse.
+    mu, beta, n = 30.0, 10.0, 40
+    data = [mu - beta * math.log(-math.log((i - 0.5) / n)) for i in range(1, n + 1)]
+    g = hs.fit_gumbel(data)
+    res = hs._bootstrap_goodness("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=300)
+    assert res["andersonDarling"]["passes"] is True
+    assert res["ks"]["passes"] is True
+
+
+def test_bootstrap_reproducible_mismo_resultado():
+    data = [12, 18, 25, 31, 40, 22, 28, 55, 33, 47]
+    g = hs.fit_gumbel(data)
+    r1 = hs._bootstrap_goodness("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=200)
+    r2 = hs._bootstrap_goodness("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=200)
+    assert r1 == r2  # semilla derivada de los datos -> determinista
