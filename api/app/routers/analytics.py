@@ -439,20 +439,21 @@ def build_idf_curves(by_duration, durations, return_periods):
     con la duración para algún Tr), repliega a una sola distribución global
     (mejor AIC total) y avisa. Devuelve curvas, distribución por duración y
     warnings de método. No incluye bootstrap (costo)."""
-    # 1) Recomendada por duración + AIC por distribución (para el repliegue).
-    chosen, aic_by_name = {}, {}
+    # 1) Ajustar UNA vez por duración; cachear las candidatas por nombre y la
+    # recomendada (menor AIC). aic_by_name acumula el AIC para el repliegue.
+    fits, chosen, aic_by_name = {}, {}, {}
     for dur in durations:
         fit = hydrostats.fit_all(by_duration[dur], return_periods=return_periods, goodness=False)
         if not fit["distributions"]:
             continue
         chosen[dur] = fit["distributions"][0]["name"]
+        fits[dur] = {d["name"]: d for d in fit["distributions"]}
         for d in fit["distributions"]:
             aic_by_name[d["name"]] = aic_by_name.get(d["name"], 0.0) + d["aic"]
 
     def quantiles_for(dur, name):
-        fit = hydrostats.fit_all(by_duration[dur], return_periods=return_periods, goodness=False)
-        d = next((c for c in fit["distributions"] if c["name"] == name), None)
-        return {q["returnPeriod"]: q["value"] for q in d["quantiles"]} if d else {}
+        cand = fits.get(dur, {}).get(name)
+        return {q["returnPeriod"]: q["value"] for q in cand["quantiles"]} if cand else {}
 
     def assemble(name_for_dur):
         curves, samples = [], []
@@ -482,13 +483,19 @@ def build_idf_curves(by_duration, durations, return_periods):
     warnings = []
     curves, samples = assemble(chosen)
     if curves and not is_monotonic(curves):
-        # repliegue a una sola distribución global
+        # repliegue a una sola distribución global (mejor AIC agregado)
         global_name = min(aic_by_name, key=aic_by_name.get) if aic_by_name else "Gumbel"
-        chosen = {dur: global_name for dur in chosen}
+        chosen = {dur: global_name for dur in fits}
         curves, samples = assemble(chosen)
-        warnings.append(
-            f"Curvas IDF no monótonas al mezclar distribuciones; se unificó a "
-            f"{global_name} (mejor AIC agregado) para mantener coherencia.")
+        if is_monotonic(curves):
+            warnings.append(
+                f"Curvas IDF no monótonas al mezclar distribuciones; se unificó a "
+                f"{global_name} (mejor AIC agregado) para mantener coherencia.")
+        else:
+            warnings.append(
+                f"Curvas IDF no monótonas; se unificó a {global_name} (mejor AIC agregado) "
+                f"para reducir inconsistencias, pero persisten irregularidades por la "
+                f"variabilidad del registro entre duraciones.")
 
     return {"curves": curves, "fitSamples": samples, "chosenByDuration": chosen,
             "warnings": warnings}
