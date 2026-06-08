@@ -507,9 +507,11 @@ def idf(payload: QueryPayload):
 
     Lee los máximos anuales móviles PRECOMPUTADOS (idf_max_anual; ventanas de
     10/20/30/60/120/180/360/720/1440 min sobre los datos de 10-min del IDEAM),
-    ajusta Gumbel por momentos a cada duración y convierte a intensidad
-    (mm/h = lámina / (D/60)). Ajusta además la ecuación I = K·T^m/D^n
-    (Vargas & Díaz-Granados). Si la estación no está precomputada, lo indica.
+    elige por AIC entre Gumbel/GEV/Log-Pearson III en cada duración (con
+    repliegue a una sola distribución si las curvas no resultan monótonas) y
+    convierte a intensidad (mm/h = lámina / (D/60)). Ajusta además la ecuación
+    I = K·T^m/D^n (Vargas & Díaz-Granados). Si la estación no está
+    precomputada, lo indica.
     """
     from ..normalize import expand_station_codes
 

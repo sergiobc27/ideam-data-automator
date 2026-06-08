@@ -303,7 +303,7 @@ def dist_sample(name, params, rng):
             alpha, beta, xi = _pe3_params(my, sy, g)
             y = xi + beta * rng.gammavariate(alpha, 1.0)
         return 10.0 ** y
-    u = rng.random()
+    u = rng.random() or 1e-12  # evita u=0 -> log(0) en los cuantiles EV
     return dist_quantile(name, params, u)
 
 
