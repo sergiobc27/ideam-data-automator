@@ -263,6 +263,15 @@ def test_build_idf_vacio_si_sin_ajuste():
     assert res["curves"] == []
 
 
+def test_aviso_exclusion_precip():
+    # Sin exclusiones -> None; con exclusiones -> mensaje con el conteo y el umbral.
+    assert analytics._aviso_exclusion_precip(0) is None
+    assert analytics._aviso_exclusion_precip(-1) is None
+    msg = analytics._aviso_exclusion_precip(3)
+    assert msg is not None
+    assert "3" in msg and "1800" in msg and "no se modifican" in msg
+
+
 def test_aviso_plausibilidad_precip():
     # Valores normales -> sin aviso.
     assert analytics._aviso_plausibilidad_precip([45.0, 120.0, 300.0, None]) is None

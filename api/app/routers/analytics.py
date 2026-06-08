@@ -247,6 +247,19 @@ def _aviso_plausibilidad_precip(valores):
     return None
 
 
+def _aviso_exclusion_precip(n_excluidos):
+    """Aviso cuando se EXCLUYEN del ajuste valores de precipitación diaria
+    físicamente imposibles (>techo). Saneo NO destructivo: los datos originales
+    del IDEAM no se modifican, solo se omiten al calcular."""
+    if n_excluidos <= 0:
+        return None
+    return (
+        f"Se excluyeron {n_excluidos} registro(s) de precipitación diaria físicamente "
+        f"imposible(s) (>{_MAX_PRECIP_DIARIA_MM:.0f} mm) del ajuste; los datos originales "
+        "no se modifican."
+    )
+
+
 def _require_single_station(payload):
     stations = (payload.catalogFilters or {}).get("stations") or []
     if len(stations) != 1:
@@ -324,12 +337,18 @@ def return_periods(payload: QueryPayload):
 
     where, params, _dataset = _cagg_filters(payload)
     with pool.connection() as conn:
+        # Saneo de cordura (no destructivo): el máximo anual IGNORA los días con
+        # precipitación físicamente imposible (>techo); así un día corrupto no
+        # envenena el ajuste, pero se conserva el año (recupera el mayor día
+        # válido restante). Se cuentan los días excluidos para avisar.
         rows = conn.execute(
             "SELECT extract(year FROM (dia AT TIME ZONE 'UTC'))::int AS anio, "
-            "max(valor_sum) FILTER (WHERE n_validos > 0 AND valor_sum >= 0) AS maximo, "
-            "count(*) FILTER (WHERE n_validos > 0) AS dias_validos "
+            "max(valor_sum) FILTER (WHERE n_validos > 0 AND valor_sum >= 0 "
+            "AND valor_sum <= %(max_precip)s) AS maximo, "
+            "count(*) FILTER (WHERE n_validos > 0) AS dias_validos, "
+            "count(*) FILTER (WHERE n_validos > 0 AND valor_sum > %(max_precip)s) AS dias_imposibles "
             f"FROM obs_diario WHERE {where} GROUP BY 1 ORDER BY 1",
-            params,
+            {**params, "max_precip": _MAX_PRECIP_DIARIA_MM},
         ).fetchall()
 
     valid_years = [
@@ -347,6 +366,9 @@ def return_periods(payload: QueryPayload):
         warnings.append("Registro corto (<15 años válidos): estimación de BAJA confianza.")
     elif n < 30:
         warnings.append("Registro de menos de 30 años: usa con cautela los Tr altos (50-100 años).")
+    aviso_excl = _aviso_exclusion_precip(sum(r[3] for r in rows))
+    if aviso_excl:
+        warnings.append(aviso_excl)
 
     payload_out = build_return_periods_payload(valid_years)
     warnings.extend(payload_out["stationarityTests"]["warnings"])
@@ -584,9 +606,17 @@ def idf(payload: QueryPayload):
             "equation": None, "warnings": [],
         }
 
+    # Saneo de cordura (no destructivo): se omiten láminas físicamente imposibles
+    # (>techo) al armar las series por duración; la tabla precalculada solo guarda
+    # el máximo por duración/año, así que aquí se descarta ese punto contaminado.
     by_duration = {}
+    excluidos_idf = 0
     for dur, _anio, value in rows:
-        by_duration.setdefault(dur, []).append(float(value))
+        v = float(value)
+        if v > _MAX_PRECIP_DIARIA_MM:
+            excluidos_idf += 1
+            continue
+        by_duration.setdefault(dur, []).append(v)
 
     durations = sorted(by_duration)
     n_years = estado[0] if estado else max((len(v) for v in by_duration.values()), default=0)
@@ -595,6 +625,9 @@ def idf(payload: QueryPayload):
         warnings.append(f"Registro corto ({n_years} años): IDF de baja confianza, evita extrapolar a Tr altos.")
     elif n_years < 25:
         warnings.append(f"{n_years} años de registro: usa con cautela los Tr de 50-100 años.")
+    aviso_excl_idf = _aviso_exclusion_precip(excluidos_idf)
+    if aviso_excl_idf:
+        warnings.append(aviso_excl_idf)
 
     built = build_idf_curves(by_duration, durations, _IDF_RETURN_PERIODS)
     curves = built["curves"]
