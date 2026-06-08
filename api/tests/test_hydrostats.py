@@ -77,3 +77,14 @@ def test_gev_cdf_fuera_de_soporte():
     loc, scale, shape = 50.0, 10.0, 0.2
     upper = loc + scale / shape
     assert hs.cdf_gev(upper + 5, loc, scale, shape) == 1.0
+
+
+def test_gammp_casos_conocidos():
+    # P(a,x) regularizada. P(1,x) = 1 - e^{-x} (exponencial).
+    assert abs(hs._gammp(1.0, 1.0) - (1 - math.exp(-1))) < 1e-9
+    assert abs(hs._gammp(1.0, 2.0) - (1 - math.exp(-2))) < 1e-9
+    # Bordes: P(a,0)=0, y crece a 1.
+    assert hs._gammp(3.0, 0.0) == 0.0
+    assert hs._gammp(3.0, 100.0) > 0.999
+    # Monótona creciente en x.
+    assert hs._gammp(2.5, 1.0) < hs._gammp(2.5, 5.0)

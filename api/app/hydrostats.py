@@ -111,3 +111,45 @@ def cdf_gev(x, loc, scale, shape):
     if y <= 0:
         return 1.0 if shape > 0 else 0.0  # k>0: por encima de la cota superior
     return math.exp(-(y ** (1.0 / shape)))
+
+
+def _gammp(a, x):
+    """Función gamma incompleta inferior regularizada P(a,x) (Numerical
+    Recipes): serie para x<a+1, fracción continua para x>=a+1. Pura."""
+    if x < 0 or a <= 0:
+        return float("nan")
+    if x == 0:
+        return 0.0
+    if x < a + 1.0:  # serie
+        ap = a
+        s = 1.0 / a
+        delta = s
+        for _ in range(500):
+            ap += 1.0
+            delta *= x / ap
+            s += delta
+            if abs(delta) < abs(s) * 1e-14:
+                break
+        return s * math.exp(-x + a * math.log(x) - math.lgamma(a))
+    # fracción continua para Q(a,x) = 1 - P(a,x)
+    tiny = 1e-300
+    b = x + 1.0 - a
+    c = 1.0 / tiny
+    d = 1.0 / b
+    h = d
+    for i in range(1, 500):
+        an = -i * (i - a)
+        b += 2.0
+        d = an * d + b
+        if abs(d) < tiny:
+            d = tiny
+        c = b + an / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        delt = d * c
+        h *= delt
+        if abs(delt - 1.0) < 1e-14:
+            break
+    q = math.exp(-x + a * math.log(x) - math.lgamma(a)) * h
+    return 1.0 - q
