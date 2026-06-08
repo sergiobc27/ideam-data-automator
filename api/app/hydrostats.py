@@ -35,3 +35,29 @@ def l_moments(sample):
     if l2 <= 0:
         return None
     return (l1, l2, l3 / l2, l4 / l2)
+
+
+def fit_gumbel(maxima):
+    """Gumbel (EV1) por L-momentos: beta = l2/ln2, mu = l1 - gamma*beta."""
+    lm = l_moments(maxima)
+    if lm is None:
+        return None
+    l1, l2, _t3, _t4 = lm
+    beta = l2 / math.log(2.0)
+    if beta <= 0:
+        return None
+    return {"name": "Gumbel", "k": 2, "params": {"mu": l1 - _EULER * beta, "beta": beta}}
+
+
+def quantile_gumbel(p, mu, beta):
+    """Cuantil para no-excedencia p (= 1 - 1/T)."""
+    return mu - beta * math.log(-math.log(p))
+
+
+def pdf_gumbel(x, mu, beta):
+    z = (x - mu) / beta
+    return math.exp(-z - math.exp(-z)) / beta
+
+
+def cdf_gumbel(x, mu, beta):
+    return math.exp(-math.exp(-(x - mu) / beta))
