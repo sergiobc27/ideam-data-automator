@@ -291,11 +291,10 @@ def build_return_periods_payload(valid_years, n_boot=1000):
 def return_periods(payload: QueryPayload):
     """Períodos de retorno de la precipitación máxima diaria anual.
 
-    Método: serie de máximos anuales (máximo del ACUMULADO diario valor_sum,
-    solo años con >=300 días con MEDICIÓN VÁLIDA) + ajuste Gumbel por método de
-    momentos (Chow, Maidment & Mays, 'Applied Hydrology'): beta = s*sqrt(6)/pi,
-    mu = media - 0.5772*beta; x_T = mu - beta*ln(-ln(1 - 1/T)). Las posiciones
-    de graficación empíricas usan Weibull p = m/(n+1).
+    Ajusta Gumbel, GEV y Log-Pearson III (L-momentos / momentos de logs) sobre la
+    serie de máximos anuales y recomienda una por AIC; la bondad se mide por
+    Anderson-Darling y KS-Lilliefors (bootstrap). Las posiciones de graficación
+    empíricas usan Weibull p = m/(n+1).
 
     Saneo (auditoría #4): se descartan máximos no finitos o negativos (centinelas
     tipo -9999 del IDEAM contaminarían la curva), y la completitud se mide por
@@ -434,6 +433,67 @@ def _solve_3x3(a, c):
     return [m[i][3] / m[i][i] for i in range(3)]
 
 
+def build_idf_curves(by_duration, durations, return_periods):
+    """Construye las curvas IDF eligiendo por AIC la distribución de CADA
+    duración. Si la mezcla rompe la monotonicidad (intensidad no decreciente
+    con la duración para algún Tr), repliega a una sola distribución global
+    (mejor AIC total) y avisa. Devuelve curvas, distribución por duración y
+    warnings de método. No incluye bootstrap (costo)."""
+    # 1) Recomendada por duración + AIC por distribución (para el repliegue).
+    chosen, aic_by_name = {}, {}
+    for dur in durations:
+        fit = hydrostats.fit_all(by_duration[dur], return_periods=return_periods, goodness=False)
+        if not fit["distributions"]:
+            continue
+        chosen[dur] = fit["distributions"][0]["name"]
+        for d in fit["distributions"]:
+            aic_by_name[d["name"]] = aic_by_name.get(d["name"], 0.0) + d["aic"]
+
+    def quantiles_for(dur, name):
+        fit = hydrostats.fit_all(by_duration[dur], return_periods=return_periods, goodness=False)
+        d = next((c for c in fit["distributions"] if c["name"] == name), None)
+        return {q["returnPeriod"]: q["value"] for q in d["quantiles"]} if d else {}
+
+    def assemble(name_for_dur):
+        curves, samples = [], []
+        for tr in return_periods:
+            points = []
+            for dur in durations:
+                if dur not in name_for_dur:
+                    continue
+                q = quantiles_for(dur, name_for_dur[dur]).get(tr)
+                if q is None or q < 0:
+                    continue
+                intensity = q / (dur / 60.0)
+                points.append({"durMin": dur, "depthMm": round(q, 1),
+                               "intensityMmH": round(intensity, 1)})
+                samples.append((tr, dur, intensity))
+            if points:
+                curves.append({"returnPeriod": tr, "points": points})
+        return curves, samples
+
+    def is_monotonic(curves):
+        for curve in curves:
+            intens = [p["intensityMmH"] for p in curve["points"]]
+            if intens != sorted(intens, reverse=True):
+                return False
+        return True
+
+    warnings = []
+    curves, samples = assemble(chosen)
+    if curves and not is_monotonic(curves):
+        # repliegue a una sola distribución global
+        global_name = min(aic_by_name, key=aic_by_name.get) if aic_by_name else "Gumbel"
+        chosen = {dur: global_name for dur in chosen}
+        curves, samples = assemble(chosen)
+        warnings.append(
+            f"Curvas IDF no monótonas al mezclar distribuciones; se unificó a "
+            f"{global_name} (mejor AIC agregado) para mantener coherencia.")
+
+    return {"curves": curves, "fitSamples": samples, "chosenByDuration": chosen,
+            "warnings": warnings}
+
+
 @router.post("/idf")
 def idf(payload: QueryPayload):
     """Curvas IDF (Intensidad-Duración-Frecuencia) REALES por estación.
@@ -489,20 +549,10 @@ def idf(payload: QueryPayload):
     elif n_years < 25:
         warnings.append(f"{n_years} años de registro: usa con cautela los Tr de 50-100 años.")
 
-    curves = []
-    fit_samples = []
-    for tr in _IDF_RETURN_PERIODS:
-        points = []
-        for dur in durations:
-            _params, quantiles = _gumbel_quantiles(by_duration[dur], (tr,))
-            depth = quantiles.get(tr)
-            if depth is None or depth < 0:
-                continue
-            intensity = depth / (dur / 60.0)  # mm/h
-            points.append({"durMin": dur, "depthMm": round(depth, 1), "intensityMmH": round(intensity, 1)})
-            fit_samples.append((tr, dur, intensity))
-        if points:
-            curves.append({"returnPeriod": tr, "points": points})
+    built = build_idf_curves(by_duration, durations, _IDF_RETURN_PERIODS)
+    curves = built["curves"]
+    fit_samples = built["fitSamples"]
+    warnings.extend(built["warnings"])
 
     # Hay filas precomputadas pero <5 años válidos → Gumbel no ajusta y no hay
     # curvas: NO es "disponible", es registro insuficiente (auditoría #5 — evita
@@ -525,11 +575,14 @@ def idf(payload: QueryPayload):
         "durations": durations,
         "returnPeriods": list(_IDF_RETURN_PERIODS),
         "curves": curves,
+        "chosenByDuration": built["chosenByDuration"],
         "equation": _fit_idf_equation(fit_samples),
         "warnings": warnings,
         "method": (
-            "Máximos anuales móviles por duración (datos 10-min) + Gumbel por momentos; "
-            "ecuación I=K·T^m/D^n por mínimos cuadrados log-lineal"
+            "Máximos anuales móviles por duración (datos 10-min); por cada duración se "
+            "elige Gumbel/GEV/Log-Pearson III por AIC (con repliegue a una sola "
+            "distribución si las curvas no resultan monótonas); ecuación I=K·T^m/D^n por "
+            "mínimos cuadrados log-lineal"
         ),
     }
 

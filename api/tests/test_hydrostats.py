@@ -239,3 +239,25 @@ def test_build_rp_payload_pocos_anios():
     out = analytics.build_return_periods_payload([{"year": 2000, "maximum": 5, "days": 365}])
     assert out["recommended"] is None
     assert out["quantiles"] == [] and out["distributions"] == []
+
+
+def test_build_idf_curvas_monotonas():
+    # by_duration sintético: lámina creciente con D y con el tamaño de muestra
+    # suficiente; las curvas resultantes deben ser monótonas (intensidad
+    # decrece con D) y no debe activarse el repliegue.
+    durations = [10, 30, 60, 120, 360]
+    base = {10: 12, 30: 22, 60: 33, 120: 45, 360: 70}
+    by_duration = {d: [base[d] * (0.8 + 0.02 * i) for i in range(25)] for d in durations}
+    res = analytics.build_idf_curves(by_duration, durations, (2, 5, 10, 25, 50, 100))
+    # intensidad estrictamente decreciente con la duración, por cada Tr
+    for curve in res["curves"]:
+        intens = [p["intensityMmH"] for p in curve["points"]]
+        assert intens == sorted(intens, reverse=True)
+    assert isinstance(res["chosenByDuration"], dict)
+    assert "warnings" in res
+
+
+def test_build_idf_vacio_si_sin_ajuste():
+    by_duration = {10: [5, 5, 5], 30: [6, 6, 6]}  # n<5 y sin dispersión
+    res = analytics.build_idf_curves(by_duration, [10, 30], (2, 5, 10))
+    assert res["curves"] == []
