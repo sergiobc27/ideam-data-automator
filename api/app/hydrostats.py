@@ -224,3 +224,47 @@ def cdf_lp3(x, meanLog, stdLog, skewLog):
         return 0.0 if beta > 0 else 1.0
     p = _gammp(alpha, w)
     return p if beta > 0 else 1.0 - p
+
+
+def dist_quantile(name, params, p):
+    if name == "Gumbel":
+        return quantile_gumbel(p, params["mu"], params["beta"])
+    if name == "GEV":
+        return quantile_gev(p, params["loc"], params["scale"], params["shape"])
+    return quantile_lp3(p, params["meanLog"], params["stdLog"], params["skewLog"])
+
+
+def dist_pdf(name, params, x):
+    if name == "Gumbel":
+        return pdf_gumbel(x, params["mu"], params["beta"])
+    if name == "GEV":
+        return pdf_gev(x, params["loc"], params["scale"], params["shape"])
+    return pdf_lp3(x, params["meanLog"], params["stdLog"], params["skewLog"])
+
+
+def dist_cdf(name, params, x):
+    if name == "Gumbel":
+        return cdf_gumbel(x, params["mu"], params["beta"])
+    if name == "GEV":
+        return cdf_gev(x, params["loc"], params["scale"], params["shape"])
+    return cdf_lp3(x, params["meanLog"], params["stdLog"], params["skewLog"])
+
+
+def loglik(name, params, data):
+    total = 0.0
+    for x in data:
+        d = dist_pdf(name, params, x)
+        if d <= 0 or not math.isfinite(d):
+            return float("-inf")
+        total += math.log(d)
+    return total
+
+
+def aic(name, params, data, k):
+    """AIC = 2k - 2*loglik. La verosimilitud se evalúa en los estimadores
+    L-momento / de-momentos (cuasi-AIC: no es MLE; criterio RELATIVO de
+    selección). Devuelve (aic, loglik)."""
+    ll = loglik(name, params, data)
+    if not math.isfinite(ll):
+        return float("inf"), ll
+    return 2 * k - 2 * ll, ll

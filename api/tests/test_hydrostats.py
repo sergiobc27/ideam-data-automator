@@ -119,3 +119,28 @@ def test_lp3_cdf_quantile_son_inversas():
     for p in (0.2, 0.5, 0.9, 0.99):
         x = hs.quantile_lp3(p, **f["params"])
         assert abs(hs.cdf_lp3(x, **f["params"]) - p) < 0.01
+
+
+def test_dist_dispatch_coincide_con_funciones_directas():
+    # quantile/pdf/cdf por nombre == funciones específicas.
+    gp = {"mu": 30.0, "beta": 10.0}
+    assert hs.dist_quantile("Gumbel", gp, 0.9) == hs.quantile_gumbel(0.9, **gp)
+    assert hs.dist_pdf("Gumbel", gp, 35.0) == hs.pdf_gumbel(35.0, **gp)
+    assert hs.dist_cdf("Gumbel", gp, 35.0) == hs.cdf_gumbel(35.0, **gp)
+
+
+def test_loglik_finita_y_aic():
+    data = [12, 18, 25, 31, 40, 22, 28]
+    g = hs.fit_gumbel(data)
+    ll = hs.loglik("Gumbel", g["params"], data)
+    assert math.isfinite(ll)
+    a, ll2 = hs.aic("Gumbel", g["params"], data, 2)
+    assert abs(ll - ll2) < 1e-9
+    assert abs(a - (2 * 2 - 2 * ll)) < 1e-9
+
+
+def test_loglik_menos_inf_fuera_de_soporte():
+    # GEV con cota superior: un dato por encima da densidad 0 -> loglik -inf.
+    params = {"loc": 50.0, "scale": 10.0, "shape": 0.3}
+    data = [48, 49, 50, 51, 200]  # 200 supera la cota superior
+    assert hs.loglik("GEV", params, data) == float("-inf")
