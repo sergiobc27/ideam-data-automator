@@ -153,3 +153,74 @@ def _gammp(a, x):
             break
     q = math.exp(-x + a * math.log(x) - math.lgamma(a)) * h
     return 1.0 - q
+
+
+def fit_lp3(maxima):
+    """Log-Pearson III: momentos (media, desv., asimetría) de log10(x).
+    El cuantil usa el factor de frecuencia Wilson-Hilferty (Bulletin 17B /
+    INVÍAS). Requiere x>0 en toda la serie."""
+    if any(v <= 0 for v in maxima):
+        return None
+    y = [math.log10(v) for v in maxima]
+    n = len(y)
+    if n < 4:
+        return None
+    my = statistics.fmean(y)
+    sy = statistics.stdev(y)
+    if sy <= 0:
+        return None
+    m3 = sum((v - my) ** 3 for v in y) / n
+    skew = (n * n) / ((n - 1) * (n - 2)) * m3 / (sy ** 3)
+    return {"name": "LogPearsonIII", "k": 3,
+            "params": {"meanLog": my, "stdLog": sy, "skewLog": skew}}
+
+
+def _wilson_hilferty_kt(p, skewLog):
+    z = _NORMAL.inv_cdf(p)
+    if abs(skewLog) < 1e-3:
+        return z
+    kk = skewLog / 6.0
+    return (2.0 / skewLog) * (((z - kk) * kk + 1.0) ** 3 - 1.0)
+
+
+def quantile_lp3(p, meanLog, stdLog, skewLog):
+    return 10.0 ** (meanLog + _wilson_hilferty_kt(p, skewLog) * stdLog)
+
+
+def _pe3_params(meanLog, stdLog, skewLog):
+    """Parámetros Pearson III (forma alpha, escala beta, posición xi) desde
+    los momentos de los logaritmos."""
+    alpha = 4.0 / (skewLog * skewLog)
+    beta = stdLog * skewLog / 2.0
+    xi = meanLog - 2.0 * stdLog / skewLog
+    return alpha, beta, xi
+
+
+def pdf_lp3(x, meanLog, stdLog, skewLog):
+    if x <= 0:
+        return 0.0
+    y = math.log10(x)
+    if abs(skewLog) < 1e-3:
+        dens_y = statistics.NormalDist(meanLog, stdLog).pdf(y)
+    else:
+        alpha, beta, xi = _pe3_params(meanLog, stdLog, skewLog)
+        w = (y - xi) / beta
+        if w <= 0:
+            return 0.0
+        ln_dens = (alpha - 1.0) * math.log(w) - w - math.log(abs(beta)) - math.lgamma(alpha)
+        dens_y = math.exp(ln_dens)
+    return dens_y / (x * _LN10)
+
+
+def cdf_lp3(x, meanLog, stdLog, skewLog):
+    if x <= 0:
+        return 0.0
+    y = math.log10(x)
+    if abs(skewLog) < 1e-3:
+        return statistics.NormalDist(meanLog, stdLog).cdf(y)
+    alpha, beta, xi = _pe3_params(meanLog, stdLog, skewLog)
+    w = (y - xi) / beta
+    if w <= 0:
+        return 0.0 if beta > 0 else 1.0
+    p = _gammp(alpha, w)
+    return p if beta > 0 else 1.0 - p

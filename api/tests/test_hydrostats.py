@@ -88,3 +88,34 @@ def test_gammp_casos_conocidos():
     assert hs._gammp(3.0, 100.0) > 0.999
     # Monótona creciente en x.
     assert hs._gammp(2.5, 1.0) < hs._gammp(2.5, 5.0)
+
+
+def test_fit_lp3_rechaza_no_positivos():
+    assert hs.fit_lp3([10, 20, 0, 30, 40]) is None     # contiene 0
+    assert hs.fit_lp3([10, 20, -5, 30, 40]) is None    # contiene negativo
+
+
+def test_lp3_skew_cero_es_lognormal():
+    # Logs simétricos -> skewLog~0 -> Wilson-Hilferty K_T = z normal.
+    # Cuantil debe coincidir con 10^(meanLog + z*stdLog).
+    data = [10 ** v for v in (1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4)]
+    f = hs.fit_lp3(data)
+    p = 1 - 1 / 100
+    z = __import__("statistics").NormalDist().inv_cdf(p)
+    esperado = 10 ** (f["params"]["meanLog"] + z * f["params"]["stdLog"])
+    assert abs(hs.quantile_lp3(p, **f["params"]) - esperado) < esperado * 0.02
+
+
+def test_lp3_quantile_monotonia():
+    data = [12, 18, 25, 31, 40, 22, 28, 55, 33, 47]
+    f = hs.fit_lp3(data)
+    qs = [hs.quantile_lp3(1 - 1 / t, **f["params"]) for t in (2, 5, 10, 50, 100)]
+    assert qs == sorted(qs)
+
+
+def test_lp3_cdf_quantile_son_inversas():
+    data = [12, 18, 25, 31, 40, 22, 28, 55, 33, 47]
+    f = hs.fit_lp3(data)
+    for p in (0.2, 0.5, 0.9, 0.99):
+        x = hs.quantile_lp3(p, **f["params"])
+        assert abs(hs.cdf_lp3(x, **f["params"]) - p) < 0.01
