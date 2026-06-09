@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import psycopg
 from psycopg_pool import ConnectionPool
 
 from .settings import settings
@@ -26,7 +27,18 @@ _SCHEMA_API = Path(__file__).with_name("schema_api.sql").read_text(encoding="utf
 def init_db():
     pool.open()
     with pool.connection() as conn:
-        conn.execute(_SCHEMA_API)
+        try:
+            # lock_timeout corto: si un lock (p. ej. un REFRESH MATERIALIZED VIEW
+            # CONCURRENTLY de mv_catalogo en curso) impide reaplicar el esquema,
+            # falla rápido en vez de esperar el statement_timeout de 30 s.
+            conn.execute("SET lock_timeout = '5s'")
+            conn.execute(_SCHEMA_API)
+        except (psycopg.errors.LockNotAvailable, psycopg.errors.QueryCanceled) as exc:
+            # El esquema es idempotente y en producción los objetos YA existen; un
+            # lock transitorio NO debe tumbar el arranque de la API. Se registra y
+            # se continúa (un reinicio durante un refresh de mv_catalogo ya no cae).
+            conn.rollback()
+            print(f"[init_db] esquema no reaplicado por lock/timeout; continúo (objetos ya existen): {exc}")
 
 
 _RATE_SQL = """
