@@ -169,3 +169,16 @@ def test_return_periods_payload_incluye_bandas_y_reliability():
     # semáforo: 25 años -> amarillo (15<=n<30)
     assert p["reliability"]["level"] == "amarillo"
     assert p["reliability"]["n"] == 25
+
+
+def test_idf_curves_incluyen_bandas_de_intensidad():
+    from app.routers import analytics
+    durations = [10, 60, 1440]
+    rps = (2, 10, 100)
+    # series sintéticas (>=5 puntos) que crecen con la duración
+    by_dur = {d: [10.0 + d * 0.01 + (i % 5) for i in range(20)] for d in durations}
+    out = analytics.build_idf_curves(by_dur, durations, rps, n_boot=200)
+    pts = [p for c in out["curves"] for p in c["points"]]
+    assert pts
+    assert all("lowerMmH" in p and "upperMmH" in p for p in pts)
+    assert all(p["lowerMmH"] <= p["intensityMmH"] <= p["upperMmH"] for p in pts)

@@ -482,7 +482,7 @@ def _solve_3x3(a, c):
     return [m[i][3] / m[i][i] for i in range(3)]
 
 
-def build_idf_curves(by_duration, durations, return_periods):
+def build_idf_curves(by_duration, durations, return_periods, n_boot=400):
     """Construye las curvas IDF eligiendo por AIC la distribución de CADA
     duración. Si la mezcla rompe la monotonicidad (intensidad no decreciente
     con la duración para algún Tr), repliega a una sola distribución global
@@ -492,7 +492,8 @@ def build_idf_curves(by_duration, durations, return_periods):
     # recomendada (menor AIC). aic_by_name acumula el AIC para el repliegue.
     fits, chosen, aic_by_name = {}, {}, {}
     for dur in durations:
-        fit = hydrostats.fit_all(by_duration[dur], return_periods=return_periods, goodness=False)
+        fit = hydrostats.fit_all(by_duration[dur], return_periods=return_periods,
+                                 goodness=False, bands=True, n_boot=n_boot)
         if not fit["distributions"]:
             continue
         chosen[dur] = fit["distributions"][0]["name"]
@@ -502,7 +503,7 @@ def build_idf_curves(by_duration, durations, return_periods):
 
     def quantiles_for(dur, name):
         cand = fits.get(dur, {}).get(name)
-        return {q["returnPeriod"]: q["value"] for q in cand["quantiles"]} if cand else {}
+        return {q["returnPeriod"]: q for q in cand["quantiles"]} if cand else {}
 
     def assemble(name_for_dur):
         curves, samples = [], []
@@ -511,12 +512,17 @@ def build_idf_curves(by_duration, durations, return_periods):
             for dur in durations:
                 if dur not in name_for_dur:
                     continue
-                q = quantiles_for(dur, name_for_dur[dur]).get(tr)
-                if q is None or q < 0:
+                qe = quantiles_for(dur, name_for_dur[dur]).get(tr)
+                if qe is None or qe["value"] < 0:
                     continue
-                intensity = q / (dur / 60.0)
-                points.append({"durMin": dur, "depthMm": round(q, 1),
-                               "intensityMmH": round(intensity, 1)})
+                factor = dur / 60.0
+                intensity = qe["value"] / factor
+                point = {"durMin": dur, "depthMm": round(qe["value"], 1),
+                         "intensityMmH": round(intensity, 1)}
+                if "lower" in qe and "upper" in qe:
+                    point["lowerMmH"] = round(qe["lower"] / factor, 1)
+                    point["upperMmH"] = round(qe["upper"] / factor, 1)
+                points.append(point)
                 samples.append((tr, dur, intensity))
             if points:
                 curves.append({"returnPeriod": tr, "points": points})
