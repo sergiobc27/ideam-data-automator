@@ -156,3 +156,16 @@ def test_bucket_date_convierte_a_utc():
 def test_bucket_date_ya_utc():
     valor = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
     assert _bucket_date(valor).isoformat() == "2026-06-15"
+
+
+def test_return_periods_payload_incluye_bandas_y_reliability():
+    from app.routers import analytics
+    ys = [{"year": 2000 + i, "maximum": 40.0 + (i % 7) * 3, "days": 365} for i in range(25)]
+    p = analytics.build_return_periods_payload(ys, n_boot=200)
+    # bandas en cada cuantil de la recomendada
+    assert p["quantiles"]
+    assert all("lower" in q and "upper" in q for q in p["quantiles"])
+    assert all(q["lower"] <= q["value"] <= q["upper"] for q in p["quantiles"])
+    # semáforo: 25 años -> amarillo (15<=n<30)
+    assert p["reliability"]["level"] == "amarillo"
+    assert p["reliability"]["n"] == 25

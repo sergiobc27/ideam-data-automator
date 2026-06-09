@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .. import hydrostats
+from .. import reliability
 from .. import stationarity
 from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..catalog import DATASETS
@@ -278,7 +279,7 @@ def build_return_periods_payload(valid_years, n_boot=1000):
     g = hydrostats.fit_gumbel(maxima) if len(maxima) >= 4 else None
     gumbel = ({"mu": round(g["params"]["mu"], 2), "beta": round(g["params"]["beta"], 2)}
               if g else None)
-    fit = hydrostats.fit_all(maxima, goodness=True, n_boot=n_boot) if len(maxima) >= 5 else \
+    fit = hydrostats.fit_all(maxima, goodness=True, bands=True, n_boot=n_boot) if len(maxima) >= 5 else \
         {"recommended": None, "distributions": []}
 
     rec_name = fit["recommended"]
@@ -299,6 +300,7 @@ def build_return_periods_payload(valid_years, n_boot=1000):
     empirical = [{"returnPeriod": round((n + 1) / (rank + 1), 2), "value": value}
                  for rank, value in enumerate(ranked)]
 
+    strep = stationarity.stationarity_report(maxima)
     return {
         "stationYears": valid_years,
         "n": n,
@@ -314,7 +316,8 @@ def build_return_periods_payload(valid_years, n_boot=1000):
                    "recomendación por AIC; bondad por Anderson-Darling y KS-Lilliefors "
                    "(bootstrap). La recomendación es un valor por defecto: el usuario "
                    "puede elegir cualquier distribución."),
-        "stationarityTests": stationarity.stationarity_report(maxima),
+        "stationarityTests": strep,
+        "reliability": reliability.reliability_report(valid_years, strep),
     }
 
 
