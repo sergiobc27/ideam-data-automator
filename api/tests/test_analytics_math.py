@@ -156,3 +156,29 @@ def test_bucket_date_convierte_a_utc():
 def test_bucket_date_ya_utc():
     valor = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
     assert _bucket_date(valor).isoformat() == "2026-06-15"
+
+
+def test_return_periods_payload_incluye_bandas_y_reliability():
+    from app.routers import analytics
+    ys = [{"year": 2000 + i, "maximum": 40.0 + (i % 7) * 3, "days": 365} for i in range(25)]
+    p = analytics.build_return_periods_payload(ys, n_boot=200)
+    # bandas en cada cuantil de la recomendada
+    assert p["quantiles"]
+    assert all("lower" in q and "upper" in q for q in p["quantiles"])
+    assert all(q["lower"] <= q["value"] <= q["upper"] for q in p["quantiles"])
+    # semáforo: 25 años -> amarillo (15<=n<30)
+    assert p["reliability"]["level"] == "amarillo"
+    assert p["reliability"]["n"] == 25
+
+
+def test_idf_curves_incluyen_bandas_de_intensidad():
+    from app.routers import analytics
+    durations = [10, 60, 1440]
+    rps = (2, 10, 100)
+    # series sintéticas (>=5 puntos) que crecen con la duración
+    by_dur = {d: [10.0 + d * 0.01 + (i % 5) for i in range(20)] for d in durations}
+    out = analytics.build_idf_curves(by_dur, durations, rps, n_boot=200)
+    pts = [p for c in out["curves"] for p in c["points"]]
+    assert pts
+    assert all("lowerMmH" in p and "upperMmH" in p for p in pts)
+    assert all(p["lowerMmH"] <= p["intensityMmH"] <= p["upperMmH"] for p in pts)

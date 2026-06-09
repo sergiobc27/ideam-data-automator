@@ -169,7 +169,7 @@ def test_bootstrap_acepta_serie_de_la_dist():
     mu, beta, n = 30.0, 10.0, 40
     data = [mu - beta * math.log(-math.log((i - 0.5) / n)) for i in range(1, n + 1)]
     g = hs.fit_gumbel(data)
-    res = hs._bootstrap_goodness("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=300)
+    res = hs._bootstrap("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=300)
     assert res["andersonDarling"]["passes"] is True
     assert res["ks"]["passes"] is True
 
@@ -177,8 +177,8 @@ def test_bootstrap_acepta_serie_de_la_dist():
 def test_bootstrap_reproducible_mismo_resultado():
     data = [12, 18, 25, 31, 40, 22, 28, 55, 33, 47]
     g = hs.fit_gumbel(data)
-    r1 = hs._bootstrap_goodness("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=200)
-    r2 = hs._bootstrap_goodness("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=200)
+    r1 = hs._bootstrap("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=200)
+    r2 = hs._bootstrap("Gumbel", g["params"], data, hs.fit_gumbel, n_boot=200)
     assert r1 == r2  # semilla derivada de los datos -> determinista
 
 
@@ -320,3 +320,38 @@ def test_build_idf_sin_1440_summary_none():
     by_duration = {d: [base[d] * (0.8 + 0.02 * i) for i in range(25)] for d in durations}
     res = analytics.build_idf_curves(by_duration, durations, (2, 5, 10, 25, 50, 100))
     assert res["stationaritySummary"] is None
+
+
+def test_bootstrap_bands_envuelven_el_valor():
+    # Serie Gumbel exacta; cada cuantil debe traer lower<=value<=upper.
+    mu, beta, n = 30.0, 10.0, 40
+    data = [mu - beta * math.log(-math.log((i - 0.5) / n)) for i in range(1, n + 1)]
+    rec = hs.fit_all(data, goodness=False, bands=True, n_boot=300)["distributions"][0]
+    assert rec["quantiles"], "debe haber cuantiles"
+    for q in rec["quantiles"]:
+        assert "lower" in q and "upper" in q
+        assert q["lower"] <= q["value"] <= q["upper"]
+
+
+def test_bootstrap_bands_reproducible():
+    # Semilla derivada de los datos -> mismas bandas entre corridas.
+    data = [12, 18, 25, 31, 40, 22, 28, 35, 19, 27, 33, 21]
+    a = hs.fit_all(data, goodness=False, bands=True, n_boot=200)["distributions"][0]["quantiles"]
+    b = hs.fit_all(data, goodness=False, bands=True, n_boot=200)["distributions"][0]["quantiles"]
+    assert [(q["lower"], q["upper"]) for q in a] == [(q["lower"], q["upper"]) for q in b]
+
+
+def test_bootstrap_bands_mas_anchas_en_tr_altos():
+    mu, beta, n = 30.0, 10.0, 40
+    data = [mu - beta * math.log(-math.log((i - 0.5) / n)) for i in range(1, n + 1)]
+    qs = {q["returnPeriod"]: q
+          for q in hs.fit_all(data, goodness=False, bands=True, n_boot=400)["distributions"][0]["quantiles"]}
+    assert (qs[100]["upper"] - qs[100]["lower"]) > (qs[2]["upper"] - qs[2]["lower"])
+
+
+def test_fit_all_sin_bands_no_agrega_lower_upper():
+    # Contrato no-rompedor: sin bands=True los cuantiles quedan como antes.
+    data = [12, 18, 25, 31, 40, 22, 28, 35, 19, 27, 33, 21]
+    rec = hs.fit_all(data, goodness=True, bands=False, n_boot=100)["distributions"][0]
+    assert rec["goodnessOfFit"]["ks"] is not None
+    assert all("lower" not in q for q in rec["quantiles"])
