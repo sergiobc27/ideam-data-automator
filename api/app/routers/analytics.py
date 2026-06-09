@@ -695,6 +695,7 @@ def idf_stations():
         rows = conn.execute(
             "SELECT DISTINCT ON (ltrim(s.codigoestacion, '0')) "
             "       e.codigoestacion, e.nombre, e.municipio, e.departamento_norm, s.anios_validos, "
+            "       e.zona_hidrografica, e.corriente, "
             "       f.level, f.n, f.completeness, f.stationary, f.reasons "
             "FROM idf_estado s "
             "JOIN estaciones e ON ltrim(e.codigoestacion, '0') = ltrim(s.codigoestacion, '0') "
@@ -709,13 +710,15 @@ def idf_stations():
             "municipio": r[2] or "N/D",
             "departamento": r[3] or "N/D",
             "aniosValidos": r[4],
+            "zonaHidrografica": r[5],
+            "corriente": r[6],
             # Semáforo precalculado (Lote 2.1); null si aún no se ha calculado.
-            "fiabilidad": None if r[5] is None else {
-                "level": r[5],
-                "n": r[6],
-                "completeness": r[7],
-                "stationary": r[8],
-                "reasons": r[9] or [],
+            "fiabilidad": None if r[7] is None else {
+                "level": r[7],
+                "n": r[8],
+                "completeness": r[9],
+                "stationary": r[10],
+                "reasons": r[11] or [],
             },
         }
         for r in rows
