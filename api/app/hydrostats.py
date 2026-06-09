@@ -307,24 +307,48 @@ def dist_sample(name, params, rng):
     return dist_quantile(name, params, u)
 
 
-def _bootstrap_goodness(name, params, data, fit_fn, n_boot=1000, alpha=0.05):
-    """Valores críticos y p-valor de AD y KS por bootstrap paramétrico
-    (Lilliefors generalizado: contempla que los parámetros se estimaron de la
-    muestra). Semilla derivada de los datos -> reproducible entre corridas."""
+def _percentile(sorted_vals, p):
+    """Percentil p (0..100) por interpolación lineal sobre una lista ORDENADA."""
+    if not sorted_vals:
+        return None
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    k = (len(sorted_vals) - 1) * (p / 100.0)
+    lo, hi = int(math.floor(k)), int(math.ceil(k))
+    if lo == hi:
+        return sorted_vals[lo]
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (k - lo)
+
+
+def _bootstrap(name, params, data, fit_fn, return_periods=(), n_boot=1000,
+               want_goodness=True, want_bands=False, alpha=0.05, band_alpha=0.10):
+    """Bootstrap paramétrico de UNA pasada (Lilliefors generalizado). Por cada
+    remuestreo simula desde la distribución ajustada, la reajusta y mide:
+    (a) AD/KS para la bondad de ajuste; (b) el cuantil por período de retorno
+    para las bandas de confianza (percentiles band_alpha/2 y 1-band_alpha/2 ->
+    P5/P95 para ~90%). Semilla derivada de los datos -> reproducible. Devuelve
+    solo lo solicitado: {'andersonDarling','ks'} y/o {'bands': {T:{lower,upper}}}."""
     n = len(data)
     obs_ad = ad_statistic(name, params, data)
     obs_ks = ks_statistic(name, params, data)
     seed = (n * 1000003 + int(round(sum(data) * 100))) % (2 ** 31)
     rng = random.Random(seed)
     ad_null, ks_null = [], []
+    q_null = {t: [] for t in return_periods}
     for _ in range(n_boot):
         sample = [dist_sample(name, params, rng) for _ in range(n)]
         refit = fit_fn(sample)
         if refit is None:
             continue
         rp = refit["params"]
-        ad_null.append(ad_statistic(name, rp, sample))
-        ks_null.append(ks_statistic(name, rp, sample))
+        if want_goodness:
+            ad_null.append(ad_statistic(name, rp, sample))
+            ks_null.append(ks_statistic(name, rp, sample))
+        if want_bands:
+            for t in return_periods:
+                q = dist_quantile(name, rp, 1.0 - 1.0 / t)
+                if math.isfinite(q) and q >= 0:
+                    q_null[t].append(q)
 
     def summarize(obs, null):
         if not null:
@@ -337,17 +361,31 @@ def _bootstrap_goodness(name, params, data, fit_fn, n_boot=1000, alpha=0.05):
         return {"statistic": round(obs, 4), "critical": round(crit, 4),
                 "pValue": round(pval, 4), "alpha": alpha, "passes": bool(obs < crit)}
 
-    return {"andersonDarling": summarize(obs_ad, ad_null), "ks": summarize(obs_ks, ks_null)}
+    out = {}
+    if want_goodness:
+        out["andersonDarling"] = summarize(obs_ad, ad_null)
+        out["ks"] = summarize(obs_ks, ks_null)
+    if want_bands:
+        lo_p, hi_p = 100.0 * band_alpha / 2.0, 100.0 * (1.0 - band_alpha / 2.0)
+        bands = {}
+        for t in return_periods:
+            vals = sorted(q_null[t])
+            lo, hi = _percentile(vals, lo_p), _percentile(vals, hi_p)
+            if lo is not None and hi is not None:
+                bands[t] = {"lower": round(lo, 1), "upper": round(hi, 1)}
+        out["bands"] = bands
+    return out
 
 
 RETURN_PERIODS = (2, 5, 10, 25, 50, 100)
 _FITTERS = (("Gumbel", fit_gumbel, 2), ("GEV", fit_gev, 3), ("LogPearsonIII", fit_lp3, 3))
 
 
-def fit_all(maxima, return_periods=RETURN_PERIODS, goodness=True, n_boot=1000):
+def fit_all(maxima, return_periods=RETURN_PERIODS, goodness=True, bands=False, n_boot=1000):
     """Ajusta Gumbel, GEV y LP3; descarta las degeneradas; ordena por AIC y
     marca la recomendada (menor AIC). Cada candidata es autocontenida
-    (params, logLik, aic, cuantiles por Tr, y bondad si goodness=True)."""
+    (params, logLik, aic, cuantiles por Tr, bondad si goodness=True, y bandas
+    de confianza ~90% en cada cuantil si bands=True)."""
     candidates = []
     for name, fit_fn, k in _FITTERS:
         fitted = fit_fn(maxima)
@@ -371,8 +409,21 @@ def fit_all(maxima, return_periods=RETURN_PERIODS, goodness=True, n_boot=1000):
             "params": {kk: round(vv, 4) for kk, vv in params.items()},
             "logLik": round(ll, 3), "aic": round(a, 3), "quantiles": quantiles,
         }
-        if goodness:
-            cand["goodnessOfFit"] = _bootstrap_goodness(name, params, maxima, fit_fn, n_boot)
+        if goodness or bands:
+            boot = _bootstrap(name, params, maxima, fit_fn, return_periods,
+                              n_boot=n_boot, want_goodness=goodness, want_bands=bands)
+            if goodness:
+                cand["goodnessOfFit"] = {"andersonDarling": boot.get("andersonDarling"),
+                                         "ks": boot.get("ks")}
+            if bands:
+                band_map = boot.get("bands", {})
+                for q in cand["quantiles"]:
+                    b = band_map.get(q["returnPeriod"])
+                    if b:
+                        # clamp: la banda SIEMPRE envuelve el estimador central
+                        # (el percentil bootstrap puede sesgarse en colas).
+                        q["lower"] = min(b["lower"], q["value"])
+                        q["upper"] = max(b["upper"], q["value"])
         candidates.append((a, cand))
     if not candidates:
         return {"recommended": None, "distributions": []}
