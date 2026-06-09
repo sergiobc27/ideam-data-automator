@@ -1,0 +1,9 @@
+[Unit]
+Description=Fiabilidad por estacion: dia 2 de cada mes 03:45 (tras el refresco IDF)
+
+[Timer]
+OnCalendar=*-*-02 03:45:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

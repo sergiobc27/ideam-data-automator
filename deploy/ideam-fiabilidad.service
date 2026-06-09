@@ -1,0 +1,14 @@
+[Unit]
+Description=Recalculo mensual del semaforo de fiabilidad por estacion (Lote 2.1)
+After=docker.service ideam-idf-refresh.service
+Wants=ideam-idf-refresh.service
+
+[Service]
+Type=oneshot
+Nice=18
+IOSchedulingClass=idle
+User=root
+EnvironmentFile=/etc/ideam/ideam.env
+WorkingDirectory=/opt/ideam/api
+ExecStart=/opt/ideam/venv/bin/python -m app.services.fiabilidad_batch
+TimeoutStartSec=30min
