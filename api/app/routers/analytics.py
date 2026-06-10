@@ -12,6 +12,8 @@ import math
 import statistics
 from datetime import timezone
 
+import psycopg
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -130,22 +132,62 @@ def timeseries(payload: TimeseriesPayload):
     }
 
 
+# Estadísticas que NO requieren ordenar (un solo barrido): baratas a cualquier
+# escala. Los percentiles SÍ exigen ordenar todas las filas y son el cuello de
+# botella en selecciones enormes.
+_STATS_BASE = (
+    "count(*), count(valorobservado), avg(valorobservado), "
+    "stddev(valorobservado), min(valorobservado), max(valorobservado), "
+    "count(DISTINCT codigoestacion), min(fechaobservacion), max(fechaobservacion)"
+)
+_STATS_PCT = (
+    "percentile_cont(0.5) WITHIN GROUP (ORDER BY valorobservado), "
+    "percentile_cont(0.95) WITHIN GROUP (ORDER BY valorobservado)"
+)
+
+
 @router.post("/summary-stats")
 def summary_stats(payload: QueryPayload):
     where, params, dataset, _canonicals = build_filters(payload)
-    with pool.connection() as conn:
-        row = conn.execute(
-            "SELECT count(*), count(valorobservado), avg(valorobservado), "
-            "stddev(valorobservado), min(valorobservado), max(valorobservado), "
-            "percentile_cont(0.5) WITHIN GROUP (ORDER BY valorobservado), "
-            "percentile_cont(0.95) WITHIN GROUP (ORDER BY valorobservado), "
-            "count(DISTINCT codigoestacion), min(fechaobservacion), max(fechaobservacion) "
-            f"FROM observaciones WHERE {where}",
-            params,
-        ).fetchone()
-    (n, n_valid, avg, std, mn, mx, p50, p95, stations, start, end) = row
+    note = None
+    try:
+        with pool.connection() as conn:
+            row = conn.execute(
+                f"SELECT {_STATS_BASE}, {_STATS_PCT} FROM observaciones WHERE {where}",
+                params,
+            ).fetchone()
+        (n, n_valid, avg, std, mn, mx, stations, start, end, p50, p95) = row
+    except psycopg.errors.QueryCanceled:
+        # Selección demasiado grande: los percentiles exactos obligan a ordenar
+        # TODAS las filas y no caben en el statement_timeout. Reintentamos sin
+        # percentiles (un solo barrido, barato) para devolver igual el resto de
+        # estadísticas. Sacar TODOS los datos sigue disponible sin límite por el
+        # Extractor; aquí solo se omite el percentil exacto en línea.
+        try:
+            with pool.connection() as conn:
+                row = conn.execute(
+                    f"SELECT {_STATS_BASE} FROM observaciones WHERE {where}",
+                    params,
+                ).fetchone()
+            (n, n_valid, avg, std, mn, mx, stations, start, end) = row
+            p50 = p95 = None
+            note = (
+                "La selección es demasiado grande para calcular percentiles exactos "
+                "en línea (requieren ordenar todas las filas). Se muestran las demás "
+                "estadísticas; para un análisis sin límite, descarga los datos desde "
+                "el Extractor."
+            )
+        except psycopg.errors.QueryCanceled:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "La selección es demasiado grande para estadísticas en línea. "
+                    "Acota el rango o los filtros, o descarga los datos desde el "
+                    "Extractor para analizarlos sin límite."
+                ),
+            )
     fmt = lambda v: float(v) if v is not None else None  # noqa: E731
-    return {
+    result = {
         "datasetId": dataset["id"],
         "rowCount": n,
         "validCount": n_valid,
@@ -159,6 +201,9 @@ def summary_stats(payload: QueryPayload):
         "observedStart": start.isoformat() if start else None,
         "observedEnd": end.isoformat() if end else None,
     }
+    if note:
+        result["note"] = note
+    return result
 
 
 @router.post("/by-region")
@@ -267,7 +312,7 @@ def _require_single_station(payload):
         raise HTTPException(400, "Selecciona exactamente una estación para este análisis.")
 
 
-def build_return_periods_payload(valid_years, n_boot=1000):
+def build_return_periods_payload(valid_years, n_boot=400):
     """Arma el cuerpo de /return-periods desde los años válidos.
 
     Contrato ADITIVO y no-rompedor: 'quantiles' y 'goodnessOfFit' reflejan la

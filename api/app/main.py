@@ -20,14 +20,20 @@ logger = logging.getLogger("ideam-api")
 async def lifespan(_app: FastAPI):
     init_db()
     Path(settings.exports_dir).mkdir(parents=True, exist_ok=True)
-    # Poblar el resumen de catálogo si aún está vacío (primera vez).
-    with pool.connection() as conn:
-        populated = conn.execute(
-            "SELECT relispopulated FROM pg_class WHERE relname = 'mv_catalogo'"
-        ).fetchone()
-        if populated and not populated[0]:
-            logger.info("Poblando mv_catalogo por primera vez...")
-            conn.execute("REFRESH MATERIALIZED VIEW mv_catalogo")
+    # Poblar el resumen de catálogo si aún está vacío (primera vez). Blindado:
+    # un hipo de la DB en el arranque (lenta/ocupada, o un REFRESH en curso) NO
+    # debe impedir que la API levante. Si falla, se registra y se continúa; el
+    # objeto ya existe y el refresh se reintenta por su timer.
+    try:
+        with pool.connection() as conn:
+            populated = conn.execute(
+                "SELECT relispopulated FROM pg_class WHERE relname = 'mv_catalogo'"
+            ).fetchone()
+            if populated and not populated[0]:
+                logger.info("Poblando mv_catalogo por primera vez...")
+                conn.execute("REFRESH MATERIALIZED VIEW mv_catalogo")
+    except Exception:  # noqa: BLE001 - nunca abortar el arranque por esto
+        logger.warning("No se pudo verificar/poblar mv_catalogo en el arranque; se continúa.", exc_info=True)
     if not settings.api_shared_secret:
         logger.error(
             "API_SHARED_SECRET no configurado: la API rechazará TODAS las "
