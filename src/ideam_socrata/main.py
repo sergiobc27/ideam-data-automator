@@ -57,7 +57,7 @@ def main():
             var_idx = int(sel_var) - 1
             if not (0 <= var_idx < len(DATASETS_INFO)): raise ValueError()
             variable_elegida = DATASETS_INFO[var_idx]
-        except:
+        except (ValueError, IndexError):
             console.print("[p_bold]Selección no válida.[/p_bold]")
             continue
             
@@ -177,7 +177,7 @@ def main():
                                 if vals_sel:
                                     estado["resumen"]["avanzados"][attr_name] = vals_sel
                                     if attr_name == "Zona Hidrográfica": estado["resumen"]["zonas"] = ", ".join(vals_sel)
-                        except: pass
+                        except Exception: pass
                     
                     if estado["resumen"]["avanzados"]:
                         with console.status("[p_bold]Consolidando pool de estaciones...[/p_bold]", spinner="moon"):
@@ -201,7 +201,7 @@ def main():
                             res_max = CLIENT.get(dataset_id, select=col_fecha, order=f"{col_fecha} DESC", limit=1)
                             g_min = int(re.search(r'\d{4}', str(res_min[0].get(col_fecha))).group())
                             g_max = int(re.search(r'\d{4}', str(res_max[0].get(col_fecha))).group())
-                        except:
+                        except Exception:
                             g_min, g_max = 1970, pd.Timestamp.now().year
 
                     mostrar_menu_opciones(f"PASO 3: RANGO DISPONIBLE ({g_min} - {g_max})", ["Usar todo el histórico", "Definir rango personalizado", "Atrás"])
@@ -217,7 +217,7 @@ def main():
                             estado["anio_ini"] = int(Prompt.ask(f"[bold #A3161A]Año INICIO (desde {g_min})[/bold #A3161A]", default=str(g_min), show_default=False))
                             estado["anio_fin"] = int(Prompt.ask(f"[bold #A3161A]Año FIN (hasta {g_max})[/bold #A3161A]", default=str(g_max), show_default=False))
                             historial.append(backup)
-                        except: continue
+                        except (ValueError, TypeError): continue
                 paso = 4
 
             elif paso == 4: # FINALIZAR

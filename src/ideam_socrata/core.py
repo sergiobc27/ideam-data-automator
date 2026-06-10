@@ -15,16 +15,19 @@ from .config import (
     CLIENT,
     LIMIT,
     MAX_WORKERS,
+    DOWNLOAD_DIR,
 )
 from .exporting import export_by_department_municipality
 from .transform import deduplicate_observations, normalize_chunk
 
 logger = logging.getLogger(__name__)
 
-# DIRECTORIO DE DATOS
-DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+# DIRECTORIO DE DATOS: ruta ABSOLUTA bajo los Documentos del usuario (igual que
+# el modo scriptable), no 'data' relativo al terminal — antes el usuario no
+# encontraba sus archivos donde el README/TUI prometían. Configurable con
+# IDEAM_OUTPUT_DIR (ver config.DOWNLOAD_DIR).
+DATA_DIR = str(DOWNLOAD_DIR)
+os.makedirs(DATA_DIR, exist_ok=True)
 
 def intentar(func, descripcion, max_intentos=5):
     """Maneja reintentos con backoff exponencial para operaciones de red."""

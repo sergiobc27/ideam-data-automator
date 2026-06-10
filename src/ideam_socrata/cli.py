@@ -124,6 +124,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _dispatch(argv)
+    except KeyboardInterrupt:
+        # Ctrl+C en medio de una descarga: salir limpio, sin traceback crudo.
+        print("\nCancelado por el usuario.")
+        return 130
+
+
+def _dispatch(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 

@@ -32,15 +32,24 @@ DOWNLOAD_DIR = Path(
     os.getenv("IDEAM_OUTPUT_DIR", str(Path.home() / "Documents" / "IDEAM_Data"))
 )
 
-# Configuración de Logging
-LOG_DIR = BASE_DIR / 'logs'
-LOG_DIR.mkdir(exist_ok=True)
-logging.basicConfig(
-    filename=LOG_DIR / 'automatizacion_ideam.log',
-    filemode='a',
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Configuración de Logging. Los logs van a una carpeta del USUARIO (junto a las
+# descargas), NO dentro del paquete instalado: en site-packages puede ser de
+# solo lectura y el mkdir/abrir archivo en import-time reventaba el arranque de
+# la CLI. Si aun así no se puede escribir, se continúa sin archivo de log.
+LOG_DIR = DOWNLOAD_DIR / 'logs'
+_LOG_LEVEL = getattr(logging, os.getenv("IDEAM_LOG_LEVEL", "INFO").upper(), logging.INFO)
+_LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
+try:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=LOG_DIR / 'automatizacion_ideam.log',
+        filemode='a',
+        level=_LOG_LEVEL,
+        format=_LOG_FORMAT,
+    )
+except OSError:
+    # Entorno de solo lectura u otra restricción: log a consola, nunca abortar.
+    logging.basicConfig(level=_LOG_LEVEL, format=_LOG_FORMAT)
 
 LIMIT         = int(os.getenv("SOCRATA_LIMIT", "50000"))
 MAX_WORKERS   = int(os.getenv("SOCRATA_MAX_WORKERS", "20"))
