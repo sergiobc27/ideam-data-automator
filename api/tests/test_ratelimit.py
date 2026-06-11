@@ -49,3 +49,19 @@ def test_ventana_desliza_y_reinicia():
     assert ok is True
     assert remaining == limit - 1
     assert retry == 0
+
+
+def test_poda_entradas_expiradas_no_crece_sin_tope():
+    # Simula rotación de IPs: muchas IPs antiguas + un disparo de poda.
+    window = 3600
+    # _PRUNE_EVERY hits hacen que la poda se ejecute al menos una vez.
+    for i in range(ratelimit._PRUNE_EVERY + 5):
+        ratelimit.check_rate_limit("lectura", f"old-{i}", 100, window, now=0.0)
+    antes = len(ratelimit._BUCKETS)
+    assert antes > 0
+    # Una llamada MUY posterior: todas las entradas viejas ya expiraron; la poda
+    # (disparada por _PRUNE_EVERY) debe liberarlas en vez de acumularlas.
+    for i in range(ratelimit._PRUNE_EVERY):
+        ratelimit.check_rate_limit("lectura", f"new-{i}", 100, window, now=window * 10)
+    # Solo deberían quedar entradas "new-*" recientes, no las "old-*".
+    assert not any(k[1].startswith("old-") for k in ratelimit._BUCKETS), "las entradas expiradas deben podarse"
