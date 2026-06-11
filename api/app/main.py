@@ -1,3 +1,4 @@
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -53,7 +54,7 @@ app = FastAPI(title="IDEAM API", lifespan=lifespan, docs_url=None, redoc_url=Non
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://ideam.sergiobc.com", "http://localhost:5173", "http://localhost:8787"],
+    allow_origins=["https://ideam.sergiobc.com"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -69,7 +70,8 @@ async def proxy_secret_guard(request: Request, call_next):
     """
     if request.url.path not in ("/api/health", "/api/ready"):
         secreto = settings.api_shared_secret
-        if not secreto or request.headers.get("x-ideam-proxy-secret") != secreto:
+        recibido = request.headers.get("x-ideam-proxy-secret", "")
+        if not secreto or not hmac.compare_digest(recibido, secreto):
             return JSONResponse({"error": "No autorizado."}, status_code=403)
     return await call_next(request)
 

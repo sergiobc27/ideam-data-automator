@@ -41,6 +41,17 @@ def init_db():
             print(f"[init_db] esquema no reaplicado por lock/timeout; continúo (objetos ya existen): {exc}")
 
 
+# Poda de ventanas viejas: sin esto la tabla crece una fila por (scope, ip)
+# para siempre (rotación de IPs = crecimiento sin tope, hallazgo de auditoría
+# 2026-06-11, simétrico a la fuga del limitador en memoria). La tabla es
+# diminuta y el scope 'export' es de baja frecuencia, así que un DELETE por
+# chequeo es despreciable. OJO: usa la ventana del scope llamante; hoy solo
+# 'export' (3600s) vive en PG — si otro scope con ventana mayor migra aquí,
+# guardar la ventana por fila.
+_PRUNE_SQL = """
+DELETE FROM api_rate_limit WHERE window_start < now() - 2 * %(window)s::interval
+"""
+
 _RATE_SQL = """
 INSERT INTO api_rate_limit (scope, ip, window_start, hits)
 VALUES (%(scope)s, %(ip)s, now(), 1)
@@ -62,6 +73,7 @@ def check_rate_limit(scope, ip, limit, window_seconds=3600):
     Devuelve (permitido, restantes, retry_after_seconds).
     """
     with pool.connection() as conn:
+        conn.execute(_PRUNE_SQL, {"window": f"{window_seconds} seconds"})
         row = conn.execute(
             _RATE_SQL, {"scope": scope, "ip": ip, "window": f"{window_seconds} seconds"}
         ).fetchone()

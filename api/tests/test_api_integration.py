@@ -7,6 +7,9 @@ Estrategia:
   middataware de seguridad.
 - El `pool` de los routers se mockea para devolver conteos controlados, de modo
   que probamos 413 (tope de filas) y 429 (rate limit) sin tocar la DB.
+- El rate-limit de export vive en Postgres (`app.db.check_rate_limit`); aquí se
+  sustituye por el limitador en memoria (misma firma y semántica por IP) para
+  que el 429 sea verificable sin DB.
 """
 
 import contextlib
@@ -63,6 +66,7 @@ class _FakePool:
 def client(monkeypatch):
     monkeypatch.setattr(settings, "api_shared_secret", SECRET)
     ratelimit.reset()
+    monkeypatch.setattr(export_router, "check_rate_limit_pg", ratelimit.check_rate_limit)
     from app.main import app
 
     # TestClient SIN `with`: no dispara lifespan (no abre el pool real).

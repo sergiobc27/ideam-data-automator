@@ -22,6 +22,30 @@ import time
 _BUCKETS: dict[tuple[str, str], tuple[float, int]] = {}
 _LOCK = threading.Lock()
 
+# Anti fuga de memoria: el dict crecería sin tope si un atacante rota IPs (cada
+# IP nueva crea una entrada que sin poda jamás se libera). Podamos las entradas
+# cuya ventana ya expiró cada _PRUNE_EVERY operaciones; y si aun así se supera
+# _MAX_BUCKETS (ráfaga de IPs frescas, todavía no expiradas), vaciamos todo como
+# último recurso. El peor caso es contar de menos algunos hits: aceptable para
+# un candado anti-abuso (no es contabilidad exacta).
+_PRUNE_EVERY = 512
+_MAX_BUCKETS = 20000
+_ops = 0
+
+
+def _maybe_prune_locked(current, window_seconds):
+    """Poda entradas expiradas (llamar con _LOCK tomado)."""
+    global _ops
+    _ops += 1
+    if _ops % _PRUNE_EVERY != 0 and len(_BUCKETS) <= _MAX_BUCKETS:
+        return
+    expired = [k for k, (ws, _) in _BUCKETS.items() if current - ws >= window_seconds]
+    for k in expired:
+        del _BUCKETS[k]
+    if len(_BUCKETS) > _MAX_BUCKETS:
+        # Ráfaga de IPs frescas: tope duro de memoria.
+        _BUCKETS.clear()
+
 
 def check_rate_limit(scope, ip, limit, window_seconds=3600, now=None):
     """Registra un hit y decide si se permite.
@@ -32,6 +56,7 @@ def check_rate_limit(scope, ip, limit, window_seconds=3600, now=None):
     current = time.time() if now is None else now
     key = (scope, ip)
     with _LOCK:
+        _maybe_prune_locked(current, window_seconds)
         window_start, hits = _BUCKETS.get(key, (current, 0))
         if current - window_start >= window_seconds:
             # La ventana expiró: reiniciar.
@@ -46,5 +71,7 @@ def check_rate_limit(scope, ip, limit, window_seconds=3600, now=None):
 
 def reset():
     """Limpia el estado (uso en tests)."""
+    global _ops
     with _LOCK:
         _BUCKETS.clear()
+        _ops = 0
