@@ -280,7 +280,7 @@ def job_part(job_id: uuid.UUID, part_index: int):
     if not row:
         raise HTTPException(404, "Job no encontrado.")
     parts, dataset_name, status = row
-    if status != "completed" or not parts or part_index >= len(parts):
+    if status != "completed" or not parts or not 0 <= part_index < len(parts):
         raise HTTPException(404, "El archivo no esta disponible.")
 
     zip_path = Path(settings.exports_dir) / f"{job_id}.zip"
@@ -301,7 +301,7 @@ def job_part_delete(job_id: uuid.UUID, part_index: int):
             "SELECT parts FROM export_jobs WHERE job_id = %s", (job_id,)
         ).fetchone()
     expires = None
-    if row and row[0] and part_index < len(row[0]):
+    if row and row[0] and 0 <= part_index < len(row[0]):
         expires = row[0][part_index].get("expiresAt")
     return {
         "ok": True,
