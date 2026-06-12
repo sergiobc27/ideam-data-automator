@@ -10,7 +10,7 @@ solo la serie diaria usa obs_diario y esa sí exige departamentos."""
 
 import math
 import statistics
-from datetime import timezone
+from datetime import date, timezone
 
 import psycopg
 
@@ -91,9 +91,24 @@ def timeseries(payload: TimeseriesPayload):
         if payload.interval == "day":
             stations = (payload.catalogFilters or {}).get("stations") or []
             if not payload.departments and not stations:
-                raise HTTPException(
-                    400, "La serie diaria requiere un departamento o estaciones concretas; usa month o year para el país completo."
-                )
+                # Excepción nacional: la diaria de TODO el país se permite solo si
+                # la ventana está acotada a ≤ 1 año (366 días). Es un escaneo
+                # acotado de obs_diario (un año nacional ~365 buckets), sin riesgo
+                # del barrido nacional completo que motivó el candado (auditoría #4).
+                ventana_dias = None
+                if payload.startDate and payload.endDate:
+                    try:
+                        ventana_dias = (
+                            date.fromisoformat(str(payload.endDate)) - date.fromisoformat(str(payload.startDate))
+                        ).days
+                    except ValueError:
+                        ventana_dias = None
+                if ventana_dias is None or ventana_dias < 0 or ventana_dias > 366:
+                    raise HTTPException(
+                        400,
+                        "La serie diaria nacional requiere acotar la ventana a 1 año o menos (startDate y endDate); "
+                        "para rangos mayores usa month o year, o filtra por departamento/estaciones.",
+                    )
             # Sin departamento, la serie diaria solo se permite para POCAS
             # estaciones (hietogramas): cota anti-DoS (auditoría #4).
             if not payload.departments and len(stations) > 10:
