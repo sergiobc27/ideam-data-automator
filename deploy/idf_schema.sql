@@ -52,9 +52,11 @@ BEGIN
                max(d10)   AS m10,   max(d20)   AS m20,   max(d30)   AS m30,
                max(d60)   AS m60,   max(d120)  AS m120,  max(d180)  AS m180,
                max(d360)  AS m360,  max(d720)  AS m720,  max(d1440) AS m1440,
-               sum(es_real::int) AS n_obs        -- observaciones REALES del año
+               sum(es_real::int) AS n_obs,       -- observaciones REALES del año
+               sum(val)          AS total_anual  -- lámina anual (cordura física)
         FROM (
             SELECT extract(year FROM (slot AT TIME ZONE 'UTC'))::int AS anio,
+                   val,
                    sum(val) OVER w10   AS d10,
                    sum(val) OVER w20   AS d20,
                    sum(val) OVER w30   AS d30,
@@ -72,14 +74,33 @@ BEGIN
             -- grande). Huecos cuentan como 0 → del lado SEGURO de diseño
             -- (nunca sobreestima). Corrige auditoría #5 #2.
             FROM (
-                WITH obs AS (
+                -- Sensor-aware (corrige el bug multi-sensor): los sensores de una
+                -- estación miden la MISMA lluvia, NO se suman. Por AÑO se usa el
+                -- sensor MÁS COMPLETO (más slots con dato). Así las estaciones de
+                -- un solo sensor no cambian y las multi-sensor dejan de inflarse
+                -- ×N. Verificado en datos reales (Soledad 0029045190: años mono-
+                -- sensor idénticos; 2024 28,9->10,0 mm/10min con el sensor 0257).
+                WITH sensores AS (
                     SELECT date_bin('10 min', fechaobservacion, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS slot,
+                           codigosensor,
                            sum(valorobservado) AS val
                     FROM observaciones
                     WHERE source_dataset_id = 's54a-sgyg'
                       AND codigoestacion = p_codigo
                       AND valorobservado >= 0 AND valorobservado <= 60  -- saneo: sin negativos ni picos no físicos
-                    GROUP BY 1
+                    GROUP BY 1, 2
+                ), dom AS (
+                    SELECT DISTINCT ON (yr) yr, codigosensor
+                    FROM (
+                        SELECT extract(year FROM (slot AT TIME ZONE 'UTC'))::int AS yr,
+                               codigosensor, count(*) AS nslots, sum(val) AS sval
+                        FROM sensores GROUP BY 1, 2
+                    ) z ORDER BY yr, nslots DESC, sval DESC
+                ), obs AS (
+                    SELECT s.slot, s.val
+                    FROM sensores s
+                    JOIN dom d ON d.yr = extract(year FROM (s.slot AT TIME ZONE 'UTC'))::int
+                              AND d.codigosensor = s.codigosensor
                 ), rango AS (SELECT min(slot) AS t0, max(slot) AS t1 FROM obs)
                 SELECT g.slot,
                        coalesce(o.val, 0)::real AS val,
@@ -106,6 +127,8 @@ BEGIN
         (180, a.m180), (360, a.m360), (720, a.m720), (1440, a.m1440)
     ) AS d(dur_min, max_mm)
     WHERE a.n_obs >= p_min_obs
+      AND a.total_anual <= 13000  -- descarta AÑOS con lámina anual físicamente imposible
+                                  -- (> récord mundial ~13.000 mm; p.ej. Soledad 2018 corrupto = 150.907)
       AND d.max_mm IS NOT NULL
       AND d.max_mm >= 0;  -- sumas de no-negativos: finitas por construcción
 
