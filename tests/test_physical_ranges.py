@@ -17,6 +17,20 @@ class ExpectedPressureTests(unittest.TestCase):
         self.assertEqual(pr.pressure_bounds(None), pr._PRESSURE_FALLBACK)
         self.assertEqual(pr.pressure_bounds(float("nan")), pr._PRESSURE_FALLBACK)
 
+    def test_respaldo_no_es_mas_estricto_que_altitud_cero(self):
+        """Asimetría (fix): una estación SIN altitud no puede tratarse más
+        estricto que una a altitud 0. El techo del respaldo debe ser >= el techo
+        ISA+tolerancia a nivel del mar (1013.25 + 80 = 1093.25)."""
+        _lo0, hi0 = pr.pressure_bounds(0.0)
+        _lo_fb, hi_fb = pr.pressure_bounds(None)
+        self.assertGreaterEqual(hi_fb, hi0)
+
+    def test_lectura_alta_a_nivel_del_mar_consistente_con_y_sin_altitud(self):
+        """1090 hPa: aceptable a altitud 0 -> también aceptable sin altitud
+        (antes se rechazaba sin altitud por el techo 1085, inconsistente)."""
+        self.assertIsNone(pr.reject_reason(pr.PRESSURE_ID, 1090.0, altitud=0.0))
+        self.assertIsNone(pr.reject_reason(pr.PRESSURE_ID, 1090.0, altitud=None))
+
 
 class RejectReasonTests(unittest.TestCase):
     def test_none_no_es_rechazo(self):

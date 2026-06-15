@@ -24,6 +24,13 @@ import pandas as pd
 import requests
 
 from ..config import APP_TOKEN, DOMAIN, MAPEO_DEPARTAMENTOS, DATASETS_INFO, CLIENT
+from ..query_validation import quote_soql
+from ..transform import deduplicate_observations, normalize_chunk, parse_export_dates
+from . import state
+from .connection import get_conn
+from .copy_loader import load_dataframe
+
+logger = logging.getLogger(__name__)
 
 # Pool de App Tokens para ROTACIÓN (reparte la carga y evita re-throttlear uno
 # solo). Se lee de SOCRATA_APP_TOKENS (coma-separado); si no, usa el unico.
@@ -40,12 +47,6 @@ def _next_token():
         return None
     with _token_lock:
         return next(_token_cycle)
-from ..transform import deduplicate_observations, normalize_chunk
-from . import state
-from .connection import get_conn
-from .copy_loader import load_dataframe
-
-logger = logging.getLogger(__name__)
 
 DATASETS_ESTANDAR = [d for d in DATASETS_INFO if d.get("tipo") == "estandar"]
 
@@ -104,7 +105,7 @@ def csv_chunks_for_window(dataset_id, col_fecha, start_iso, end_iso, chunksize):
     SIN $order: ordenar fuerza a Socrata a preparar todo antes de streamear
     (>10 min en anios grandes -> read timeout); el upsert no necesita orden.
     """
-    where = f"{col_fecha} >= '{start_iso}' AND {col_fecha} < '{end_iso}'"
+    where = f"{col_fecha} >= {quote_soql(start_iso)} AND {col_fecha} < {quote_soql(end_iso)}"
     params = {"$where": where, "$limit": 500000000}
     headers = {"X-App-Token": APP_TOKEN} if APP_TOKEN else {}
     domain = DOMAIN if DOMAIN.startswith("http") else f"https://{DOMAIN}"
@@ -228,7 +229,7 @@ def download_window_csv(dataset_id, col_fecha, start_iso, end_iso, attempts=3):
         return dest
 
     domain = DOMAIN if DOMAIN.startswith("http") else f"https://{DOMAIN}"
-    where = f"{col_fecha} >= '{start_iso}' AND {col_fecha} < '{end_iso}'"
+    where = f"{col_fecha} >= {quote_soql(start_iso)} AND {col_fecha} < {quote_soql(end_iso)}"
     part = dest.with_suffix(".part")
     # --max-time es el seguro final: --speed-limit solo corta DURANTE la
     # transferencia; si el servidor acepta la conexion y nunca envia el primer
@@ -281,13 +282,10 @@ def bulk_csv_chunks(dataset_id, chunksize):
     return pd.read_csv(resp.raw, dtype=str, chunksize=chunksize)
 
 
-def _parse_bulk_dates(serie):
-    """Fechas del export masivo: formato US explicito (rapido), con fallback."""
-    parsed = pd.to_datetime(serie, format="%m/%d/%Y %I:%M:%S %p", errors="coerce")
-    mask = parsed.isna() & serie.notna()
-    if mask.any():
-        parsed.loc[mask] = pd.to_datetime(serie.loc[mask], errors="coerce")
-    return parsed
+# Fechas del export masivo: mismo parser que la ruta CSV de la CLI (formato US
+# explícito + fallback). Único punto de verdad en transform.parse_export_dates
+# para que el floating_id sea idéntico por todas las rutas.
+_parse_bulk_dates = parse_export_dates
 
 
 def backfill_full(conn, dataset, chunksize):

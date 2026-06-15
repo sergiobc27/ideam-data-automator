@@ -43,7 +43,7 @@ from .config import (
 )
 from .core import intentar
 from .exporting import export_by_department_municipality, write_coverage_report
-from .query_validation import build_department_filter
+from .query_validation import build_department_filter, quote_soql
 from .transform import deduplicate_observations, normalize_chunk, normalize_label, parse_export_dates
 
 DATASETS_ESTANDAR = {d["id"]: d for d in DATASETS_INFO if d.get("tipo") == "estandar"}
@@ -127,8 +127,8 @@ def month_blocks(start_date: str, end_date: str):
 def _fetch_block(dataset_id, col_fecha, lo, hi, base_filters, descripcion):
     """Baja la ventana EXACTA [lo, hi) — hi exclusivo, ya recortada por month_blocks."""
     filters = list(base_filters)
-    filters.append(f"{col_fecha} >= '{lo}T00:00:00.000'")
-    filters.append(f"{col_fecha} < '{hi}T00:00:00.000'")
+    filters.append(f"{col_fecha} >= {quote_soql(f'{lo}T00:00:00.000')}")
+    filters.append(f"{col_fecha} < {quote_soql(f'{hi}T00:00:00.000')}")
     where = " AND ".join(filters)
 
     rows, offset = [], 0
@@ -156,8 +156,8 @@ def _fetch_block_fast(dataset_id, col_fecha, lo, hi, where_deptos, descripcion):
     $limit explicito. Devuelve un DataFrame en formato SODA normalizado.
     """
     where = (
-        f"{where_deptos} AND {col_fecha} >= '{lo}T00:00:00.000' "
-        f"AND {col_fecha} < '{hi}T00:00:00.000'"
+        f"{where_deptos} AND {col_fecha} >= {quote_soql(f'{lo}T00:00:00.000')} "
+        f"AND {col_fecha} < {quote_soql(f'{hi}T00:00:00.000')}"
     )
     domain = DOMAIN if DOMAIN.startswith("http") else f"https://{DOMAIN}"
     headers = {"X-App-Token": APP_TOKEN} if APP_TOKEN else {}

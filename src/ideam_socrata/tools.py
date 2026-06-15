@@ -2,6 +2,7 @@ import logging
 
 from .extract import iter_socrata_pages
 from .load import build_payload, upsert_to_socrata
+from .query_validation import date_window_clauses
 from .transform import dataframe_memory_mb, deduplicate_observations, normalize_chunk
 
 logger = logging.getLogger(__name__)
@@ -45,8 +46,7 @@ def sync_ideam_to_socrata(
     value is a compact execution summary.
     """
     filters = list(where_filters or [])
-    filters.append(f"{date_column} >= '{start_date}T00:00:00.000'")
-    filters.append(f"{date_column} < '{end_date}T00:00:00.000'")
+    filters.extend(date_window_clauses(date_column, start_date, end_date))
     where_str = " AND ".join(filters)
 
     summary = {

@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .config import CATALOG_DATASET_ID, CLIENT, LIMIT, MAX_WORKERS
 from .core import intentar
 from .exporting import export_by_department_municipality, write_coverage_report
+from .query_validation import quote_soql
 from .transform import deduplicate_observations, normalize_chunk
 
 # Atributos de filtro avanzado: etiqueta -> columna en la observación.
@@ -86,6 +87,13 @@ def cobertura_filtro(dataset_id: str, col_fecha: str, filtros_dep: list[str]) ->
     return info
 
 
+def _in_clause_avanzado(c_cat: str, vals: list[str]) -> str:
+    """`upper(col) IN (...)` con cada valor ESCAPADO (quote_soql) — evita que una
+    comilla en el valor rompa la consulta o permita inyección SoQL."""
+    quoted = ", ".join(quote_soql(str(v).upper()) for v in vals)
+    return f"upper({c_cat}) IN ({quoted})"
+
+
 def resolver_pool_estaciones(filtros_dep: list[str], avanzados: dict[str, list[str]]) -> set[str]:
     """Resuelve el conjunto de codigos de estacion que cumplen los filtros avanzados."""
     clauses = [_a_catalogo(f) for f in filtros_dep]
@@ -93,8 +101,7 @@ def resolver_pool_estaciones(filtros_dep: list[str], avanzados: dict[str, list[s
         if not vals:
             continue
         c_cat = attr_col.replace("zonahidrografica", "zona_hidrografica")
-        quoted = ", ".join("'" + str(v).upper() + "'" for v in vals)
-        clauses.append(f"upper({c_cat}) IN ({quoted})")
+        clauses.append(_in_clause_avanzado(c_cat, vals))
     where = " AND ".join(clauses) or None
     rows = intentar(
         lambda: CLIENT.get(CATALOG_DATASET_ID, select="codigo", where=where, limit=50000),
@@ -107,9 +114,9 @@ def construir_tareas(anio_ini, anio_fin, filtros_base, estaciones_pool, col_fech
     """Replica main.py paso 4: chunks de codigos (500) x años -> lista de tareas."""
     est_norm = []
     for c in estaciones_pool:
-        est_norm.append(f"'{c}'")
+        est_norm.append(quote_soql(c))
         if len(str(c)) == 8:
-            est_norm.append(f"'00{c}'")
+            est_norm.append(quote_soql(f"00{c}"))
 
     if est_norm:
         filtros_api = []
@@ -130,11 +137,11 @@ def _bajar_bloque(dataset_id, col_fecha, anio, mes, filtros, descripcion):
     f = list(filtros)
     if anio and mes:
         sig_a, sig_m = (anio, mes + 1) if mes < 12 else (anio + 1, 1)
-        f.append(f"{col_fecha} >= '{anio}-{mes:02d}-01T00:00:00.000'")
-        f.append(f"{col_fecha} < '{sig_a}-{sig_m:02d}-01T00:00:00.000'")
+        f.append(f"{col_fecha} >= {quote_soql(f'{anio}-{mes:02d}-01T00:00:00.000')}")
+        f.append(f"{col_fecha} < {quote_soql(f'{sig_a}-{sig_m:02d}-01T00:00:00.000')}")
     elif anio and not mes:
-        f.append(f"{col_fecha} >= '{anio}-01-01T00:00:00.000'")
-        f.append(f"{col_fecha} < '{anio + 1}-01-01T00:00:00.000'")
+        f.append(f"{col_fecha} >= {quote_soql(f'{anio}-01-01T00:00:00.000')}")
+        f.append(f"{col_fecha} < {quote_soql(f'{anio + 1}-01-01T00:00:00.000')}")
     where = " AND ".join(f) if f else None
 
     filas, offset = [], 0

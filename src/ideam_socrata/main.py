@@ -11,7 +11,7 @@ from .config import console, CLIENT, DATASETS_INFO, MAPEO_DEPARTAMENTOS, CATALOG
 from .ui import (espera_estetica, mostrar_tabla_opciones, mostrar_tabla_simple,
                 extraer_ids_seleccionados, mostrar_panel_resumen, mostrar_menu_opciones, mostrar_logo)
 from .core import intentar, descargar_estandar_por_meses, descargar_especial_directo
-from .query_validation import build_department_filter
+from .query_validation import build_department_filter, quote_soql
 
 def main():
     console.clear()
@@ -225,8 +225,8 @@ def main():
                 filtros_fijos = list(estado["filtros_base"])
                 est_norm = []
                 for c in estado["estaciones_pool"]:
-                    est_norm.append(f"'{c}'")
-                    if len(c) == 8: est_norm.append(f"'00{c}'")
+                    est_norm.append(quote_soql(c))
+                    if len(c) == 8: est_norm.append(quote_soql(f"00{c}"))
                 
                 lista_filtros_api = []
                 if est_norm:

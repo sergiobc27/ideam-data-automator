@@ -17,6 +17,7 @@ import logging
 import time
 
 from ..extract import iter_socrata_pages
+from ..query_validation import quote_soql
 from ..transform import deduplicate_observations, normalize_chunk
 from . import state
 from .backfill import DATASETS_ESTANDAR, DICT_REEMPLAZO, _retry
@@ -33,7 +34,7 @@ def delta_dataset(conn, dataset):
         logger.info("%s sin backfill todavia; delta omitido.", dataset_id)
         return 0
 
-    where = f"{col_fecha} > '{hwm.strftime('%Y-%m-%dT%H:%M:%S')}'"
+    where = f"{col_fecha} > {quote_soql(hwm.strftime('%Y-%m-%dT%H:%M:%S'))}"
     rows_loaded = 0
     for page in iter_socrata_pages(dataset_id, _retry, where_str=where, order=col_fecha):
         df = normalize_chunk(page, dataset_id, col_fecha, DICT_REEMPLAZO)

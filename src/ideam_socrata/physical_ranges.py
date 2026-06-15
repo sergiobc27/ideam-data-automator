@@ -40,9 +40,13 @@ _ISA_EXP = 5.25588
 # El objetivo es cazar CORRUPCIÓN (centinelas, ceros, valores a nivel del mar en
 # estaciones de páramo), no rechazar lecturas reales en el borde.
 _PRESSURE_TOL_HPA = 80.0
-# Respaldo sin altitud: rango global ancho. 300 hPa ≈ 9.000 m (por encima de
-# cualquier estación andina); 1.085 hPa ≈ récord mundial a nivel del mar.
-_PRESSURE_FALLBACK = (300.0, 1085.0)
+# Respaldo sin altitud: rango global ancho. El piso (300 hPa ≈ 9.000 m) queda
+# por encima de cualquier estación andina. El techo se DERIVA de la banda ISA a
+# nivel del mar (P0 + tolerancia) para que una estación sin altitud NUNCA se
+# trate más estricto que una a altitud 0 (antes el techo fijo 1085 < 1093.25
+# del caso altitud 0 -> asimetría: 1090 hPa pasaba con altitud=0 y se rechazaba
+# sin altitud). 1.093 hPa ronda el récord mundial a nivel del mar.
+_PRESSURE_FALLBACK = (300.0, _P0_HPA + _PRESSURE_TOL_HPA)
 
 # Niveles (río y mar) en metros: techo de cordura. Un río en crecida puede llegar
 # a decenas de metros de cota sobre el cero de mira; >100 m es imposible. El cero

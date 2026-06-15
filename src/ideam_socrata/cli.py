@@ -23,15 +23,13 @@ _configurar_consola_utf8()
 from .config import CLIENT, MAPEO_DEPARTAMENTOS
 from .core import intentar
 from .main import main as interactive_main
-from .query_validation import build_department_filter, verify_department_coverage
+from .query_validation import build_department_filter, date_window_clauses, verify_department_coverage
 
 
 def _verify_atlantico(args: argparse.Namespace) -> int:
     where, _replacements, variants = build_department_filter([args.department], MAPEO_DEPARTAMENTOS)
-    bounded_where = (
-        f"{where} AND "
-        f"{args.date_column} >= '{args.start_date}T00:00:00.000' AND "
-        f"{args.date_column} < '{args.end_date}T00:00:00.000'"
+    bounded_where = " AND ".join(
+        [where, *date_window_clauses(args.date_column, args.start_date, args.end_date)]
     )
     sample_rows = CLIENT.get(
         args.dataset_id,

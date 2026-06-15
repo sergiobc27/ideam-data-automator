@@ -16,6 +16,20 @@ def quote_soql(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def date_window_clauses(date_column, start_date, end_date):
+    """Build two safe SoQL clauses for a [start, end) date window.
+
+    ``date_column`` is an internal/config identifier (interpolated as-is); the
+    date literals are escaped via :func:`quote_soql` so a stray or hostile quote
+    cannot break or inject the query. Returns the two clauses as a list so the
+    caller can join/compose them with any base filters.
+    """
+    return [
+        f"{date_column} >= {quote_soql(f'{start_date}T00:00:00.000')}",
+        f"{date_column} < {quote_soql(f'{end_date}T00:00:00.000')}",
+    ]
+
+
 def department_variants(department, mapping):
     """Return configured variants plus normalized fallbacks for a department."""
     variants = set(mapping.get(department, [department]))
