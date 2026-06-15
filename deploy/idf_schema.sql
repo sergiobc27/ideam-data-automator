@@ -96,11 +96,22 @@ BEGIN
                                codigosensor, count(*) AS nslots, sum(val) AS sval
                         FROM sensores GROUP BY 1, 2
                     ) z ORDER BY yr, nslots DESC, sval DESC
-                ), obs AS (
+                ), obs0 AS (
                     SELECT s.slot, s.val
                     FROM sensores s
                     JOIN dom d ON d.yr = extract(year FROM (s.slot AT TIME ZONE 'UTC'))::int
                               AND d.codigosensor = s.codigosensor
+                ), dias_malos AS (
+                    -- Días con lámina diaria físicamente imposible (>500 mm/día,
+                    -- holgado sobre cualquier extremo real colombiano): corrupción
+                    -- de la fuente que pasa el tope por-slot pero acumula absurdos
+                    -- en el día (p.ej. San Andrés 1.647 mm/día). Se EXCLUYE el día,
+                    -- no el año, para no perder años buenos.
+                    SELECT date_trunc('day', slot AT TIME ZONE 'UTC') AS dia
+                    FROM obs0 GROUP BY 1 HAVING sum(val) > 500
+                ), obs AS (
+                    SELECT slot, val FROM obs0
+                    WHERE date_trunc('day', slot AT TIME ZONE 'UTC') NOT IN (SELECT dia FROM dias_malos)
                 ), rango AS (SELECT min(slot) AS t0, max(slot) AS t1 FROM obs)
                 SELECT g.slot,
                        coalesce(o.val, 0)::real AS val,
@@ -129,6 +140,10 @@ BEGIN
     WHERE a.n_obs >= p_min_obs
       AND a.total_anual <= 13000  -- descarta AÑOS con lámina anual físicamente imposible
                                   -- (> récord mundial ~13.000 mm; p.ej. Soledad 2018 corrupto = 150.907)
+      AND a.m1440 <= 500          -- descarta AÑOS cuyo máx 24h MÓVIL es físicamente imposible.
+                                  -- La métrica IDF es ventana móvil de 24h; el tope dias_malos solo
+                                  -- cubre el día-CALENDARIO y deja pasar ráfagas corruptas que cruzan
+                                  -- la medianoche (p.ej. 400+400 mm en dos días <500 c/u → móvil 800).
       AND d.max_mm IS NOT NULL
       AND d.max_mm >= 0;  -- sumas de no-negativos: finitas por construcción
 
