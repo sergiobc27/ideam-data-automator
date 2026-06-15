@@ -18,6 +18,7 @@ from .config import (
     DOWNLOAD_DIR,
 )
 from .exporting import export_by_department_municipality
+from .query_validation import date_window_clauses
 from .transform import deduplicate_observations, normalize_chunk
 
 logger = logging.getLogger(__name__)
@@ -72,12 +73,14 @@ def descargar_estandar_por_meses(dataset_id, col_fecha, tareas, dict_reemplazo, 
         def bajar_bloque(anio, mes, filtros):
             f_mes = list(filtros)
             if anio and mes:
-                f_mes.append(f"{col_fecha} >= '{anio}-{mes:02d}-01T00:00:00.000'")
                 sig_anio, sig_mes = (anio, mes + 1) if mes < 12 else (anio + 1, 1)
-                f_mes.append(f"{col_fecha} < '{sig_anio}-{sig_mes:02d}-01T00:00:00.000'")
+                f_mes.extend(date_window_clauses(
+                    col_fecha, f"{anio}-{mes:02d}-01", f"{sig_anio}-{sig_mes:02d}-01"
+                ))
             elif anio and not mes: # Cuando se agrupa por año
-                f_mes.append(f"{col_fecha} >= '{anio}-01-01T00:00:00.000'")
-                f_mes.append(f"{col_fecha} < '{anio+1}-01-01T00:00:00.000'")
+                f_mes.extend(date_window_clauses(
+                    col_fecha, f"{anio}-01-01", f"{anio+1}-01-01"
+                ))
             where_str = " AND ".join(f_mes) if f_mes else None
             
             all_data = []
