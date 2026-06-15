@@ -119,6 +119,14 @@ def timeseries(payload: TimeseriesPayload):
         else:
             table, time_col = "obs_mensual", "mes"
         where, params, dataset = _cagg_filters(payload, time_col)
+        # Precip: excluir acumulados físicamente imposibles (corrupción residual
+        # multi-sensor/centinelas) para que la lámina (metric='sum') y el heatmap
+        # no muestren picos absurdos. Techo por bucket de origen: mensual 2.500,
+        # diario 1.800. Saneo NO destructivo; el de origen va en el Fix #2.
+        if _es_precip(dataset):
+            ceiling = _MAX_PRECIP_MENSUAL_MM if table == "obs_mensual" else _MAX_PRECIP_DIARIA_MM
+            where = f"({where}) AND valor_sum <= %(max_precip_bucket)s"
+            params = {**params, "max_precip_bucket": ceiling}
         metric_sql = _METRICS_CAGG[payload.metric]
         sql = (
             f"SELECT time_bucket('{bucket}', {time_col}) AS bucket, {metric_sql} AS value, "
@@ -221,20 +229,36 @@ def summary_stats(payload: QueryPayload):
     return result
 
 
+# Para precipitación, el "promedio por lectura" (sum/n_validos) no tiene sentido
+# físico (sale ~0,05 mm/lectura de 10 min). La métrica correcta es la LÁMINA
+# MENSUAL (mm/mes) = media del acumulado mensual por estación: avg(valor_sum)
+# sobre las filas (estación, mes) de obs_mensual. Se expone en campos NUEVOS
+# (monthlyDepth*) SIN tocar `mean`, porque otros consumidores (bento del
+# dashboard, anomalías) siguen usando `mean` como avg-por-lectura → intensidad.
+
+
+def _es_precip(dataset):
+    return dataset["id"] == _PRECIP_DATASET
+
+
 @router.post("/by-region")
 def by_region(payload: QueryPayload):
     where, params, dataset = _cagg_filters(payload, "mes")
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT departamento, sum(n)::bigint, sum(valor_sum) / nullif(sum(n_validos), 0), "
-            "count(DISTINCT codigoestacion) FROM obs_mensual "
+            "count(DISTINCT codigoestacion), "
+            "avg(valor_sum) FILTER (WHERE valor_sum <= %(max_mensual)s) FROM obs_mensual "
             f"WHERE {where} GROUP BY departamento ORDER BY 2 DESC",
-            params,
+            {**params, "max_mensual": _MAX_PRECIP_MENSUAL_MM},
         ).fetchall()
+    precip = _es_precip(dataset)
     return {
         "datasetId": dataset["id"],
         "regions": [
-            {"department": r[0], "rowCount": r[1], "mean": float(r[2]) if r[2] is not None else None, "stationCount": r[3]}
+            {"department": r[0], "rowCount": r[1], "mean": float(r[2]) if r[2] is not None else None,
+             "stationCount": r[3],
+             "monthlyDepth": float(r[4]) if (precip and r[4] is not None) else None}
             for r in rows
         ],
     }
@@ -246,10 +270,12 @@ def by_station(payload: QueryPayload):
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT codigoestacion, max(municipio), max(departamento), sum(n)::bigint, "
-            "sum(valor_sum) / nullif(sum(n_validos), 0), min(mes), max(mes) FROM obs_mensual "
+            "sum(valor_sum) / nullif(sum(n_validos), 0), min(mes), max(mes), "
+            "avg(valor_sum) FILTER (WHERE valor_sum <= %(max_mensual)s) FROM obs_mensual "
             f"WHERE {where} GROUP BY codigoestacion ORDER BY 4 DESC LIMIT 100",
-            params,
+            {**params, "max_mensual": _MAX_PRECIP_MENSUAL_MM},
         ).fetchall()
+    precip = _es_precip(dataset)
     return {
         "datasetId": dataset["id"],
         "stations": [
@@ -258,6 +284,7 @@ def by_station(payload: QueryPayload):
                 "mean": float(r[4]) if r[4] is not None else None,
                 "firstObservation": _bucket_date(r[5]).isoformat() if r[5] else None,
                 "lastObservation": _bucket_date(r[6]).isoformat() if r[6] else None,
+                "monthlyDepth": float(r[7]) if (precip and r[7] is not None) else None,
             }
             for r in rows
         ],
@@ -271,16 +298,25 @@ def monthly_climatology(payload: QueryPayload):
         rows = conn.execute(
             "SELECT extract(month FROM (mes AT TIME ZONE 'UTC'))::int AS mes_num, "
             "sum(valor_sum) / nullif(sum(n_validos), 0) AS media, "
-            "min(valor_min), max(valor_max), sum(n)::bigint FROM obs_mensual "
+            "min(valor_min), max(valor_max), sum(n)::bigint, "
+            "avg(valor_sum) FILTER (WHERE valor_sum <= %(max_mensual)s), "
+            "min(valor_sum) FILTER (WHERE valor_sum <= %(max_mensual)s), "
+            "max(valor_sum) FILTER (WHERE valor_sum <= %(max_mensual)s) FROM obs_mensual "
             f"WHERE {where} GROUP BY mes_num ORDER BY mes_num",
-            params,
+            {**params, "max_mensual": _MAX_PRECIP_MENSUAL_MM},
         ).fetchall()
+    precip = _es_precip(dataset)
+    # Para precip, min/max climatológicos son del ACUMULADO mensual (mes más seco /
+    # más lluvioso del histórico), no del extremo de una lectura suelta de 10 min.
     return {
         "datasetId": dataset["id"],
         "months": [
             {"month": r[0], "mean": float(r[1]) if r[1] is not None else None,
              "min": float(r[2]) if r[2] is not None else None,
-             "max": float(r[3]) if r[3] is not None else None, "n": r[4]}
+             "max": float(r[3]) if r[3] is not None else None, "n": r[4],
+             "monthlyDepth": float(r[5]) if (precip and r[5] is not None) else None,
+             "monthlyDepthMin": float(r[6]) if (precip and r[6] is not None) else None,
+             "monthlyDepthMax": float(r[7]) if (precip and r[7] is not None) else None}
             for r in rows
         ],
     }
@@ -294,6 +330,15 @@ _EULER_MASCHERONI = 0.5772156649015329
 # (Foc-Foc, Reunión, 1966). Un valor por encima es casi seguro un sentinel/error
 # de la fuente IDEAM; lo avisamos (NO lo borramos) porque contamina los ajustes.
 _MAX_PRECIP_DIARIA_MM = 1800.0
+# Techo físico para la LÁMINA MENSUAL (acumulado por estación-mes). El mes más
+# lluvioso jamás registrado en Colombia (Chocó/Lloró) ronda ~2.000 mm; 2.500 mm
+# deja margen y aun así excluye SOLO ~0,7% de los meses-estación del espejo, que
+# son corrupción residual (sensores de muestreo sub-10-min cuya suma se infla,
+# y centinelas): sin este techo, 180 meses imposibles (hasta 302.267 mm en una
+# sola estación) envenenan la media (Valle del Cauca superaba a Chocó). Es un
+# saneo NO destructivo en lectura; la limpieza de origen va en el saneo de
+# ingesta (Fix #2). Auditoría de datos 2026-06-15.
+_MAX_PRECIP_MENSUAL_MM = 2500.0
 
 
 def _aviso_plausibilidad_precip(valores):
