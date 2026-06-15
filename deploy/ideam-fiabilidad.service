@@ -7,8 +7,12 @@ Wants=ideam-idf-refresh.service
 Type=oneshot
 Nice=18
 IOSchedulingClass=idle
+# Serializado con el resto de trabajos pesados via flock compartido y agrupado
+# en el slice que cede recursos a la API.
+Slice=ideam-heavy.slice
 User=root
 EnvironmentFile=/etc/ideam/ideam.env
 WorkingDirectory=/opt/ideam/api
-ExecStart=/opt/ideam/venv/bin/python -m app.services.fiabilidad_batch
-TimeoutStartSec=30min
+ExecStart=/usr/bin/flock -w 7200 /run/ideam-heavy.lock /opt/ideam/venv/bin/python -m app.services.fiabilidad_batch
+# 4h = hasta 2h esperando el lock + el recalculo (que de por si es <=30min).
+TimeoutStartSec=4h

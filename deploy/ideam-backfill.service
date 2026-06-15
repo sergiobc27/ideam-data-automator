@@ -30,6 +30,12 @@ Wants=network-online.target
 Type=oneshot
 User=root
 EnvironmentFile=/etc/ideam/ideam.env
+# Cede CPU/IO a Postgres+API durante la carga (puede durar dias). NO usa el
+# flock compartido a proposito: como corre dias, bloquear el delta diario todo
+# ese tiempo seria peor; el slice + Nice/idle ya acotan su impacto.
+Slice=ideam-heavy.slice
+Nice=15
+IOSchedulingClass=idle
 # Reanudable: los (dataset, anio) en estado 'done' se saltan automaticamente.
 ExecStart=/opt/ideam/venv/bin/python -m ideam_socrata.db.backfill --dataset all --mode year --compress
 WorkingDirectory=/opt/ideam/app

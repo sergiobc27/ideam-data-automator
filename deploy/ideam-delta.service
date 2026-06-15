@@ -7,6 +7,15 @@ Wants=network-online.target
 Type=oneshot
 User=root
 EnvironmentFile=/etc/ideam/ideam.env
-ExecStart=/opt/ideam/venv/bin/python -m ideam_socrata.db.delta
+# Slice + flock compartido: cede CPU/IO a Postgres+API y serializa con los
+# demas trabajos pesados (un solo recalculo/ingesta pesada a la vez).
+Slice=ideam-heavy.slice
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+# flock -w 7200: si otro trabajo pesado tiene el lock, espera hasta 2h y luego
+# corre; el lock se libera solo cuando el otro proceso termina (incl. si muere).
+ExecStart=/usr/bin/flock -w 7200 /run/ideam-heavy.lock /opt/ideam/venv/bin/python -m ideam_socrata.db.delta
 WorkingDirectory=/opt/ideam/app
-TimeoutStartSec=4h
+# 6h = hasta 2h esperando el lock + el propio delta (que normalmente es corto).
+TimeoutStartSec=6h

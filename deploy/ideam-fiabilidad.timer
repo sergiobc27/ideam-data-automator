@@ -1,8 +1,11 @@
 [Unit]
-Description=Fiabilidad por estacion: dia 2 de cada mes 03:45 (tras el refresco IDF)
+Description=Fiabilidad por estacion: dia 2 de cada mes 06:30 UTC (tras el refresco IDF)
 
 [Timer]
-OnCalendar=*-*-02 03:45:00
+# 06:30 UTC: despues del refresco IDF (06:00). El flock compartido garantiza
+# que si el IDF aun corre, fiabilidad espera su turno (no corren en paralelo).
+OnCalendar=*-*-02 06:30:00 UTC
+RandomizedDelaySec=300
 Persistent=true
 
 [Install]

@@ -2,7 +2,11 @@
 Description=Backup diario del espejo IDEAM a las 05:00 UTC (tras el delta)
 
 [Timer]
-OnCalendar=*-*-* 05:00
+# Sufijo UTC explícito para no depender de la zona del box (coherente con
+# ideam-delta.timer). RandomizedDelaySec evita un disparo exacto que se apile
+# con otros cron del sistema.
+OnCalendar=*-*-* 05:00:00 UTC
+RandomizedDelaySec=300
 Persistent=true
 
 [Install]
