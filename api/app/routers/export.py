@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from psycopg.types.json import Jsonb
 
 from ..db import pool
+from ..http_utils import client_ip as _client_ip
 from ..models import CreateJobPayload, ExportPagePayload, QueryPayload
 from ..normalize import build_filters, normalize_label
 from ..db import check_rate_limit as check_rate_limit_pg
@@ -17,10 +18,6 @@ from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..settings import settings
 
 router = APIRouter()
-
-
-def _client_ip(request: Request):
-    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
 
 
 def _export_rate(request: Request):

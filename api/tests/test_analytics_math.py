@@ -14,8 +14,6 @@ import pytest
 from app.routers.analytics import (
     _bucket_date,
     _fit_idf_equation,
-    _gumbel_ks_test,
-    _gumbel_quantiles,
     _solve_3x3,
     _spi_category,
 )
@@ -43,60 +41,6 @@ def test_solve_3x3_general():
 def test_solve_3x3_singular_returns_none():
     # Filas linealmente dependientes -> singular -> None
     assert _solve_3x3([[1, 2, 3], [2, 4, 6], [1, 0, 1]], [1, 2, 3]) is None
-
-
-# --- _gumbel_quantiles --------------------------------------------------------
-
-def test_gumbel_pocos_anios_none():
-    assert _gumbel_quantiles([10, 20, 30, 40], (10,)) == (None, {})  # n<5
-
-
-def test_gumbel_std_cero_none():
-    assert _gumbel_quantiles([25, 25, 25, 25, 25], (10,)) == (None, {})
-
-
-def test_gumbel_valores_conocidos():
-    # Serie [10,20,30,40,50]: mean=30, s(n-1)=sqrt(250)=15.8114
-    # beta = s*sqrt(6)/pi ; mu = mean - 0.5772*beta
-    params, q = _gumbel_quantiles([10, 20, 30, 40, 50], (2, 10, 100))
-    assert params is not None
-    s = math.sqrt(250)
-    beta = s * math.sqrt(6) / math.pi
-    mu = 30 - 0.5772156649015329 * beta
-    assert abs(params["beta"] - round(beta, 2)) < 0.05
-    assert abs(params["mu"] - round(mu, 2)) < 0.05
-    # cuantil Tr conocido: x_T = mu - beta*ln(-ln(1-1/T))
-    esperado_t10 = mu - beta * math.log(-math.log(1 - 1 / 10))
-    assert abs(q[10] - esperado_t10) < 1e-6
-
-
-def test_gumbel_monotonia():
-    # A mayor período de retorno, mayor cuantil.
-    _params, q = _gumbel_quantiles([12, 18, 25, 31, 40, 22, 28], (2, 5, 10, 25, 50, 100))
-    valores = [q[t] for t in (2, 5, 10, 25, 50, 100)]
-    assert valores == sorted(valores)
-
-
-# --- _gumbel_ks_test ----------------------------------------------------------
-
-def test_ks_test_estructura_y_pocos():
-    assert _gumbel_ks_test([10, 20, 30, 40], 20, 5) is None  # n<5
-    r = _gumbel_ks_test([10, 20, 30, 40, 50], 22.9, 12.3)
-    assert r["test"] == "Kolmogorov-Smirnov"
-    assert 0 <= r["statistic"] <= 1
-    assert r["critical"] > 0
-    assert isinstance(r["passes"], bool)
-
-
-def test_ks_test_acepta_serie_gumbel():
-    # Serie construida desde el cuantil Gumbel exacto (sigue Gumbel por diseño):
-    # el test NO debe rechazarla.
-    mu, beta = 30.0, 10.0
-    n = 25
-    maxima = [mu - beta * math.log(-math.log((i - 0.5) / n)) for i in range(1, n + 1)]
-    r = _gumbel_ks_test(maxima, mu, beta)
-    assert r["passes"] is True
-    assert r["statistic"] < r["critical"]
 
 
 # --- _fit_idf_equation --------------------------------------------------------

@@ -20,7 +20,9 @@ from ..normalize import expand_station_codes
 
 _PRECIP_DATASET = "s54a-sgyg"
 _MAX_PRECIP_DIARIA_MM = 1800.0   # techo de plausibilidad física (idéntico a /return-periods)
-_DIAS_MIN_ANIO = 300             # año "válido" si tiene >=300 días con dato
+# Año "válido" si tiene >= este número de días con dato. Constante COMPARTIDA con
+# reliability y analytics (ver app.reliability._DIAS_MIN_ANIO_VALIDO): no redefinir.
+_DIAS_MIN_ANIO = reliability._DIAS_MIN_ANIO_VALIDO
 
 # Máximos diarios anuales (con días válidos), idéntico al de /return-periods.
 _MAXIMA_SQL = (

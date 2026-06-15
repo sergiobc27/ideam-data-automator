@@ -19,18 +19,16 @@ from fastapi.responses import JSONResponse
 
 from .. import hydrostats
 from .. import reliability
+from ..reliability import _DIAS_MIN_ANIO_VALIDO
 from .. import stationarity
 from ..caggs import cagg_filters as _cagg_filters, can_use_cagg as _can_use_cagg
 from ..catalog import DATASETS
 from ..db import pool
+from ..http_utils import client_ip as _client_ip
 from ..models import HistogramPayload, QueryPayload, SpiPayload, TimeseriesPayload
 from ..normalize import build_filters
 from ..ratelimit import check_rate_limit
 from ..settings import settings
-
-
-def _client_ip(request: Request):
-    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
 
 
 def analytics_rate(request: Request):
@@ -119,14 +117,17 @@ def timeseries(payload: TimeseriesPayload):
         else:
             table, time_col = "obs_mensual", "mes"
         where, params, dataset = _cagg_filters(payload, time_col)
-        # Precip: excluir acumulados físicamente imposibles (corrupción residual
-        # multi-sensor/centinelas) para que la lámina (metric='sum') y el heatmap
-        # no muestren picos absurdos. Techo por bucket de origen: mensual 2.500,
-        # diario 1.800. Saneo NO destructivo; el de origen va en el Fix #2.
+        # Precip: excluir valores físicamente imposibles (corrupción residual
+        # multi-sensor/centinelas) para que ni la lámina (sum) ni los extremos
+        # (min/max) muestren picos absurdos. El filtro va sobre la COLUMNA que se
+        # agrega (sum→valor_sum, min→valor_min, max→valor_max), no siempre sobre
+        # valor_sum: si no, los extremos por lectura se colaban sin tope (Fix #1).
+        # Saneo NO destructivo; el de origen va en el Fix #2.
         if _es_precip(dataset):
-            ceiling = _MAX_PRECIP_MENSUAL_MM if table == "obs_mensual" else _MAX_PRECIP_DIARIA_MM
-            where = f"({where}) AND valor_sum <= %(max_precip_bucket)s"
-            params = {**params, "max_precip_bucket": ceiling}
+            clause, ceiling = _precip_ceiling_clause(payload.metric, table)
+            if clause:
+                where = f"({where}) AND {clause}"
+                params = {**params, "max_precip_bucket": ceiling}
         metric_sql = _METRICS_CAGG[payload.metric]
         sql = (
             f"SELECT time_bucket('{bucket}', {time_col}) AS bucket, {metric_sql} AS value, "
@@ -306,14 +307,18 @@ def monthly_climatology(payload: QueryPayload):
             {**params, "max_mensual": _MAX_PRECIP_MENSUAL_MM},
         ).fetchall()
     precip = _es_precip(dataset)
-    # Para precip, min/max climatológicos son del ACUMULADO mensual (mes más seco /
-    # más lluvioso del histórico), no del extremo de una lectura suelta de 10 min.
+    # Para precip, los campos min/max (min(valor_min)/max(valor_max)) son extremos
+    # POR LECTURA (10 min) y, además, NO están capados por el techo: max(valor_max)
+    # exponía picos imposibles de la corrupción residual. Se OMITEN (None) para
+    # precip; la métrica correcta y capada del mes más seco/lluvioso ya vive en
+    # monthlyDepthMin/Max (acumulado mensual). Para datasets NO precip (temperatura,
+    # nivel, etc.) min/max sí son significativos y se conservan. (Fix #1)
     return {
         "datasetId": dataset["id"],
         "months": [
             {"month": r[0], "mean": float(r[1]) if r[1] is not None else None,
-             "min": float(r[2]) if r[2] is not None else None,
-             "max": float(r[3]) if r[3] is not None else None, "n": r[4],
+             "min": None if precip else (float(r[2]) if r[2] is not None else None),
+             "max": None if precip else (float(r[3]) if r[3] is not None else None), "n": r[4],
              "monthlyDepth": float(r[5]) if (precip and r[5] is not None) else None,
              "monthlyDepthMin": float(r[6]) if (precip and r[6] is not None) else None,
              "monthlyDepthMax": float(r[7]) if (precip and r[7] is not None) else None}
@@ -325,7 +330,6 @@ def monthly_climatology(payload: QueryPayload):
 # --- Hidrología: períodos de retorno, SPI, histograma -------------------------
 
 _PRECIP_DATASET = "s54a-sgyg"
-_EULER_MASCHERONI = 0.5772156649015329
 # Techo físico para precipitación diaria: el récord mundial en 24 h es ~1825 mm
 # (Foc-Foc, Reunión, 1966). Un valor por encima es casi seguro un sentinel/error
 # de la fuente IDEAM; lo avisamos (NO lo borramos) porque contamina los ajustes.
@@ -339,6 +343,27 @@ _MAX_PRECIP_DIARIA_MM = 1800.0
 # saneo NO destructivo en lectura; la limpieza de origen va en el saneo de
 # ingesta (Fix #2). Auditoría de datos 2026-06-15.
 _MAX_PRECIP_MENSUAL_MM = 2500.0
+
+
+def _precip_ceiling_clause(metric, table):
+    """Cláusula WHERE (y techo) para excluir precipitación imposible en los caggs,
+    eligiendo la COLUMNA correcta según la métrica que se agrega (Fix #1):
+
+      - sum/avg/count → se filtra el ACUMULADO del bucket (valor_sum) con el techo
+        del bucket (mensual 2.500 / diario 1.800).
+      - max → agrega max(valor_max); se filtra valor_max con el techo por LECTURA
+        (diario): un extremo de una lectura de 10 min no puede superarlo.
+      - min → agrega min(valor_min); se filtra valor_min con el mismo techo.
+
+    Devuelve (clause_sql | "", ceiling). El parámetro siempre se llama
+    %(max_precip_bucket)s para que el caller lo inyecte de forma uniforme."""
+    if metric in ("min", "max"):
+        col = "valor_min" if metric == "min" else "valor_max"
+        ceiling = _MAX_PRECIP_DIARIA_MM
+    else:
+        col = "valor_sum"
+        ceiling = _MAX_PRECIP_MENSUAL_MM if table == "obs_mensual" else _MAX_PRECIP_DIARIA_MM
+    return f"{col} <= %(max_precip_bucket)s", ceiling
 
 
 def _aviso_plausibilidad_precip(valores):
@@ -462,14 +487,16 @@ def return_periods(payload: QueryPayload):
     valid_years = [
         {"year": r[0], "maximum": round(float(r[1]), 1), "days": r[2]}
         for r in rows
-        if r[1] is not None and math.isfinite(r[1]) and r[1] >= 0 and r[2] >= 300
+        # Umbral de año válido COMPARTIDO (ver reliability._DIAS_MIN_ANIO_VALIDO):
+        # mismas reglas que reliability/fiabilidad_batch, sin literal propio.
+        if r[1] is not None and math.isfinite(r[1]) and r[1] >= 0 and r[2] >= _DIAS_MIN_ANIO_VALIDO
     ]
     discarded = len(rows) - len(valid_years)
     n = len(valid_years)
 
     warnings = []
     if discarded:
-        warnings.append(f"{discarded} año(s) descartado(s) por tener menos de 300 días de datos.")
+        warnings.append(f"{discarded} año(s) descartado(s) por tener menos de {_DIAS_MIN_ANIO_VALIDO} días de datos.")
     if n < 15:
         warnings.append("Registro corto (<15 años válidos): estimación de BAJA confianza.")
     elif n < 30:
@@ -491,48 +518,6 @@ def return_periods(payload: QueryPayload):
 
 
 _IDF_RETURN_PERIODS = (2, 5, 10, 25, 50, 100)
-
-
-def _gumbel_quantiles(maxima, return_periods):
-    """Ajuste Gumbel por método de momentos y cuantiles para cada Tr.
-    Devuelve (params, {Tr: valor}) o (None, {}) si n<5."""
-    n = len(maxima)
-    if n < 5:
-        return None, {}
-    mean = statistics.fmean(maxima)
-    std = statistics.stdev(maxima)
-    if std <= 0:
-        return None, {}
-    beta = std * math.sqrt(6) / math.pi
-    mu = mean - _EULER_MASCHERONI * beta
-    quantiles = {t: mu - beta * math.log(-math.log(1 - 1 / t)) for t in return_periods}
-    return {"mu": round(mu, 2), "beta": round(beta, 2)}, quantiles
-
-
-def _gumbel_ks_test(maxima, mu, beta, alpha=0.05):
-    """Prueba de bondad de ajuste Kolmogorov-Smirnov del Gumbel ajustado.
-
-    Compara la CDF empírica de los máximos anuales con la teórica de Gumbel
-    F(x)=exp(-exp(-(x-mu)/beta)); el estadístico D es la máxima diferencia.
-    Si D < valor crítico (≈1.36/√n para α=0.05), NO se rechaza el ajuste. El
-    Manual INVÍAS exige este contraste (Smirnov-Kolmogorov o Chi-cuadrado)
-    antes de aceptar la distribución de extremos. Implementación pura."""
-    n = len(maxima)
-    if n < 5 or beta <= 0:
-        return None
-    ordered = sorted(maxima)
-    d = 0.0
-    for i, x in enumerate(ordered, start=1):
-        f_teo = math.exp(-math.exp(-(x - mu) / beta))
-        d = max(d, abs(f_teo - i / n), abs(f_teo - (i - 1) / n))
-    d_crit = 1.36 / math.sqrt(n)  # aproximación asintótica, α=0.05
-    return {
-        "test": "Kolmogorov-Smirnov",
-        "statistic": round(d, 4),
-        "critical": round(d_crit, 4),
-        "alpha": alpha,
-        "passes": bool(d < d_crit),
-    }
 
 
 def _fit_idf_equation(samples):
@@ -941,6 +926,13 @@ def _spi_category(z):
     return "Extremadamente húmedo"
 
 
+def _spi_latest(points):
+    """Último punto con SPI interpretable (spi no nulo). Si ningún punto tiene
+    SPI real, devuelve None: un punto con spi=None es ininterpretable y antes se
+    devolvía como `latest`, confundiendo a los consumidores (auditoría)."""
+    return next((p for p in reversed(points) if p["spi"] is not None), None)
+
+
 @router.post("/spi")
 def spi(payload: SpiPayload):
     """SPI (Índice de Precipitación Estandarizada) por percentiles empíricos.
@@ -1041,7 +1033,7 @@ def spi(payload: SpiPayload):
             "extremas (±2) no son alcanzables (limitación del método no-paramétrico)."
         )
 
-    latest = next((p for p in reversed(points) if p["spi"] is not None), points[-1] if points else None)
+    latest = _spi_latest(points)
     return {
         "scale": payload.scale,
         "points": points,

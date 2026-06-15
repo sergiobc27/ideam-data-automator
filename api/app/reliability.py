@@ -5,7 +5,19 @@ anuales, completitud de cada año y resultado de las pruebas de estacionariedad.
 Degradación por capas con piso en rojo. Función pura; no toca la DB. La consume
 app.routers.analytics."""
 
-_DIAS_MIN_ANIO = 330          # < ~10% del año ausente -> año "completo"
+# Umbral ÚNICO de "año válido": un año cuenta como completo si tiene al menos
+# estos días con dato. Decisión del dueño del proyecto: 300 días (auditoría de
+# umbrales 2026-06-15). Esta es la fuente de verdad COMPARTIDA por las tres
+# rutas que antes lo definían por separado y desincronizaban:
+#   - app.routers.analytics.return_periods  (filtro de años válidos)
+#   - app.reliability.reliability_report     (completitud, abajo vía _DIAS_MIN_ANIO)
+#   - app.services.fiabilidad_batch          (filtro de años válidos)
+# Cualquiera de esas debe IMPORTAR esta constante, nunca redefinir el número.
+_DIAS_MIN_ANIO_VALIDO = 300
+
+# Alias histórico usado internamente para la completitud; apunta a la constante
+# compartida para no divergir (antes era 330 y desincronizaba con las otras).
+_DIAS_MIN_ANIO = _DIAS_MIN_ANIO_VALIDO
 _LEVELS = ("rojo", "amarillo", "verde")
 
 

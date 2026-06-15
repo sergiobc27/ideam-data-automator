@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ..catalog import CATALOG_FILTERS_BY_KEY
 from ..db import pool
+from ..http_utils import client_ip as _client_ip
 from ..ratelimit import check_rate_limit
 from ..models import CatalogBundlePayload, CatalogOptionsPayload, QueryPayload
 from ..normalize import (
@@ -19,10 +20,6 @@ from ..settings import settings
 router = APIRouter()
 
 BUNDLE_COLUMNS = ["departamento", "municipio", "zonahidrografica", "codigoestacion", "nombreestacion", "total"]
-
-
-def _client_ip(request: Request):
-    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
 
 
 def _catalog_rate(request: Request):

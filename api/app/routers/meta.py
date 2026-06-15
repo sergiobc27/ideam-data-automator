@@ -10,6 +10,12 @@ from ..settings import settings
 
 router = APIRouter()
 
+# Cota de seguridad para /api/stations.geojson: el catálogo ronda ~18K estaciones,
+# así que 50.000 deja amplísimo margen y NO recorta nada hoy; solo evita que un
+# crecimiento inesperado o un cambio de filtro materialice cientos de miles de
+# filas a la vez y dispare el OOM del box pequeño (auditoría #2).
+_STATIONS_GEOJSON_CAP = 50000
+
 
 @router.get("/api/health")
 def health():
@@ -124,7 +130,10 @@ def stations_geojson():
             "departamento_norm, municipio, latitud, longitud, altitud, "
             "zona_hidrografica, corriente, entidad "
             "FROM estaciones "
-            "WHERE latitud BETWEEN -5 AND 14 AND longitud BETWEEN -82 AND -66"
+            "WHERE latitud BETWEEN -5 AND 14 AND longitud BETWEEN -82 AND -66 "
+            # Cota de seguridad anti-OOM (ver _STATIONS_GEOJSON_CAP): no recorta
+            # el catálogo actual (~18K), evita materializar sin límite (auditoría #2).
+            f"LIMIT {_STATIONS_GEOJSON_CAP}"
         ).fetchall()
     features = [
         {

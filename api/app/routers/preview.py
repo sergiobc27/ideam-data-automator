@@ -4,16 +4,13 @@ from datetime import date, timedelta
 from fastapi import APIRouter, HTTPException, Request
 
 from ..db import pool
+from ..http_utils import client_ip as _client_ip
 from ..models import QueryPayload
 from ..normalize import build_filters
 from ..ratelimit import check_rate_limit
 from ..settings import settings
 
 router = APIRouter()
-
-
-def _client_ip(request: Request):
-    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
 
 
 def _lectura_rate(request: Request):
@@ -39,6 +36,27 @@ def _serialize(row):
     if fecha is not None:
         record["fechaobservacion"] = fecha.strftime("%Y-%m-%dT%H:%M:%S")
     return record
+
+
+def _preview_techo_clause(end, params):
+    """Cláusula y param del techo de fecha para acotar el ORDER BY ... DESC del
+    preview (Fix #3).
+
+    En datasets que terminaron en el pasado (p.ej. mar, hasta 2020) el
+    ChunkAppend arranca en "hoy" y recorre años de chunks vacíos hacia atrás
+    antes de juntar las filas del LIMIT → timeout. Acotar con el techo real del
+    dataset (max de obs_diario) hace que el scan empiece en el chunk correcto.
+
+    Se OMITE el techo solo cuando ya hay una cota superior:
+      - el usuario dio endDate → build_filters puso 'end' en params (su rango
+        acota), o
+      - no hay datos (end is None) → no hay nada que acotar.
+    El caso COMÚN (hay filas pero el usuario no acotó endDate) SÍ recibe el techo.
+
+    Devuelve (techo_sql | "", extra_params_dict)."""
+    if end is not None and "end" not in params:
+        return " AND fechaobservacion < %(preview_techo)s", {"preview_techo": end + timedelta(days=1)}
+    return "", {}
 
 
 def _resumen_desde_agregado(conn, payload, dataset):
@@ -129,12 +147,9 @@ def preview(payload: QueryPayload, request: Request):
         # obs_diario): sin esto, en datasets que terminaron en el pasado (mar,
         # hasta 2020) el ChunkAppend arrancaba en 2026 y recorría ~6 años de
         # chunks vacíos antes de juntar 200 filas -> timeout. Con el techo,
-        # el scan empieza en el chunk correcto. Si no hay filas, se omite.
-        row_params = dict(params, limit=settings.preview_limit)
-        techo = ""
-        if end is not None and "end" not in params:
-            row_params["preview_techo"] = end + timedelta(days=1)
-            techo = " AND fechaobservacion < %(preview_techo)s"
+        # el scan empieza en el chunk correcto. Lógica en _preview_techo_clause.
+        techo, techo_params = _preview_techo_clause(end, params)
+        row_params = dict(params, limit=settings.preview_limit, **techo_params)
         rows = []
         if row_count:
             rows = conn.execute(
