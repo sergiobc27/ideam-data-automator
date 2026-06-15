@@ -126,15 +126,29 @@ CREATE TABLE IF NOT EXISTS ingest_state (
 );
 
 -- ------------------------------------------------------------
--- Continuous aggregates para dashboards (jerárquicos)
--- n = filas totales, n_validos = con valor no nulo.
--- El promedio mensual se calcula en la API como
--- sum(valor_sum)/nullif(sum(n_validos),0) (promedio ponderado).
+-- Agregados SENSOR-AWARE para dashboards (corrige el bug multi-sensor, 2026-06-15).
+-- Una estación de precipitación puede tener >1 sensor midiendo la MISMA lluvia;
+-- sumarlos inflaba ×N (p.ej. Soledad 0029045190). Arquitectura:
+--   obs_diario_sensor : cagg por (estación, SENSOR, día) — NO mezcla sensores.
+--   obs_diario        : VISTA que colapsa al sensor MÁS COMPLETO por día
+--                       (DISTINCT ON ... n_validos DESC). Mismas columnas que antes.
+--   obs_mensual       : MATERIALIZED VIEW = rollup mensual de obs_diario (no puede
+--                       ser cagg: depende de una vista con DISTINCT ON). Se refresca
+--                       a diario con el job TimescaleDB refresh_obs_mensual_job
+--                       (REFRESH ... CONCURRENTLY = no bloquea lecturas).
+-- Estaciones mono-sensor y datasets no-precip: comportamiento IDÉNTICO al anterior.
+-- n = filas totales, n_validos = con valor no nulo. El promedio mensual se calcula
+-- en la API como sum(valor_sum)/nullif(sum(n_validos),0).
+-- APROVISIONAMIENTO (DB nueva): tras crear estos objetos, materializar una vez —
+--   CALL refresh_continuous_aggregate('obs_diario_sensor', NULL, NULL);  -- por ventanas si es grande
+--   REFRESH MATERIALIZED VIEW obs_mensual;
+--   SELECT add_job('refresh_obs_mensual_job', INTERVAL '1 day');         -- programar el refresco diario
 -- ------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS obs_diario
+CREATE MATERIALIZED VIEW IF NOT EXISTS obs_diario_sensor
 WITH (timescaledb.continuous) AS
 SELECT source_dataset_id,
        codigoestacion,
+       codigosensor,
        departamento,
        municipio,
        time_bucket('1 day', fechaobservacion) AS dia,
@@ -145,21 +159,32 @@ SELECT source_dataset_id,
        max(valorobservado)     AS valor_max,
        sum(valorobservado)     AS valor_sum
 FROM observaciones
-GROUP BY source_dataset_id, codigoestacion, departamento, municipio, dia
+GROUP BY source_dataset_id, codigoestacion, codigosensor, departamento, municipio, dia
 WITH NO DATA;
 
-SELECT add_continuous_aggregate_policy('obs_diario',
+SELECT add_continuous_aggregate_policy('obs_diario_sensor',
     start_offset      => INTERVAL '3 days',
     end_offset        => INTERVAL '1 hour',
     schedule_interval => INTERVAL '1 hour',
     if_not_exists     => TRUE);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS obs_mensual
-WITH (timescaledb.continuous) AS
-SELECT source_dataset_id,
-       codigoestacion,
-       departamento,
-       municipio,
+-- obs_diario: colapsa al sensor más completo por día (drop-in, mismas columnas).
+CREATE OR REPLACE VIEW obs_diario AS
+SELECT source_dataset_id, codigoestacion, departamento, municipio, dia,
+       n, n_validos, valor_avg, valor_min, valor_max, valor_sum
+FROM (
+  SELECT DISTINCT ON (source_dataset_id, codigoestacion, departamento, municipio, dia)
+         source_dataset_id, codigoestacion, departamento, municipio, dia,
+         n, n_validos, valor_avg, valor_min, valor_max, valor_sum
+  FROM obs_diario_sensor
+  ORDER BY source_dataset_id, codigoestacion, departamento, municipio, dia,
+           n_validos DESC NULLS LAST, valor_sum DESC NULLS LAST
+) c;
+
+-- obs_mensual: rollup mensual de obs_diario (ya colapsado). MATERIALIZED VIEW por
+-- rendimiento nacional (la vista en vivo tardaba ~8,5 s; el matview ~40 ms).
+CREATE MATERIALIZED VIEW IF NOT EXISTS obs_mensual AS
+SELECT source_dataset_id, codigoestacion, departamento, municipio,
        time_bucket('1 month', dia) AS mes,
        sum(n)          AS n,
        sum(n_validos)  AS n_validos,
@@ -170,8 +195,8 @@ FROM obs_diario
 GROUP BY source_dataset_id, codigoestacion, departamento, municipio, mes
 WITH NO DATA;
 
-SELECT add_continuous_aggregate_policy('obs_mensual',
-    start_offset      => INTERVAL '3 months',
-    end_offset        => INTERVAL '1 day',
-    schedule_interval => INTERVAL '1 day',
-    if_not_exists     => TRUE);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_obs_mensual_m
+  ON obs_mensual (source_dataset_id, codigoestacion, departamento, municipio, mes) NULLS NOT DISTINCT;
+
+CREATE OR REPLACE PROCEDURE refresh_obs_mensual_job(job_id int, config jsonb)
+LANGUAGE plpgsql AS $$ BEGIN REFRESH MATERIALIZED VIEW CONCURRENTLY obs_mensual; END; $$;
