@@ -961,7 +961,11 @@ def spi(payload: SpiPayload):
     where, params, _dataset = _cagg_filters(payload, "mes")
     with pool.connection() as conn:
         rows = conn.execute(
-            "SELECT (mes AT TIME ZONE 'UTC')::date AS mes, coalesce(valor_sum, 0) "
+            # NO se hace coalesce(valor_sum,0): un mes presente pero sin medición
+            # válida (n_validos=0 → valor_sum NULL) es un HUECO, no "0 mm de lluvia".
+            # Tratarlo como 0 sesgaba el SPI hacia falsas sequías. Los huecos se
+            # saltan abajo y las ventanas que los tocan quedan invalidadas.
+            "SELECT (mes AT TIME ZONE 'UTC')::date AS mes, valor_sum "
             f"FROM obs_mensual WHERE {where} ORDER BY 1",
             params,
         ).fetchall()
@@ -971,7 +975,9 @@ def spi(payload: SpiPayload):
                 "warnings": ["Registro mensual insuficiente para calcular el SPI."]}
 
     # Serie mensual CONTIGUA: los huecos invalidan las ventanas que los tocan.
-    monthly = {(r[0].year, r[0].month): float(r[1]) for r in rows}
+    # Un mes con valor_sum NULL (presente pero sin medición válida) se SALTA → se
+    # comporta como hueco, no como 0 mm (evita falsas sequías en el SPI).
+    monthly = {(r[0].year, r[0].month): float(r[1]) for r in rows if r[1] is not None}
     first, last = rows[0][0], rows[-1][0]
 
     def month_seq(start, end):

@@ -7,6 +7,26 @@ def test_l_moments_pocos_datos_none():
     assert hs.l_moments([1, 2, 3]) is None  # n<4
 
 
+def test_bandas_bootstrap_respetan_techo_fisico():
+    # El techo acota la banda bootstrap (excluye cuantiles simulados degenerados),
+    # pero la banda siempre envuelve el estimador central; por eso el límite real
+    # de upper es max(valor_puntual, techo). Sin el techo, una cola LP3 explosiva
+    # dispararía upper muy por encima de ese límite.
+    maxima = [80, 95, 110, 70, 130, 90, 150, 60, 105, 120, 85, 140]
+    fit = hs.fit_all(maxima, return_periods=(2, 10, 100), goodness=False, bands=True,
+                     n_boot=200, max_value=120.0)
+    for dist in fit["distributions"]:
+        for q in dist["quantiles"]:
+            if "upper" in q:
+                limite = max(q["value"], 120.0)
+                assert q["upper"] <= limite + 1e-9, f"{dist['name']} banda sup {q['upper']} > {limite}"
+
+
+def test_min_skew_umbral_es_1e2():
+    # El umbral de degeneración LP3 quedó en 1e-2 (robustez numérica).
+    assert hs._MIN_SKEW == 1e-2
+
+
 def test_l_moments_l1_es_media():
     lm = hs.l_moments([10, 20, 30, 40, 50])
     assert lm is not None

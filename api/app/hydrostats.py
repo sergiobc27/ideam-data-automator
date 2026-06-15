@@ -14,6 +14,14 @@ import statistics
 _EULER = 0.5772156649015329
 _LN10 = math.log(10.0)
 _NORMAL = statistics.NormalDist()
+# |skew| por debajo de este umbral: la LP3 degenera a lognormal. Subido de 1e-3
+# a 1e-2 por robustez numérica: con skew minúsculo, alpha=4/skew² explota y el
+# factor Wilson-Hilferty se vuelve inestable (auditoría 2026-06-15).
+_MIN_SKEW = 1e-2
+# Techo físico de precipitación diaria (récord mundial 24 h ~1825 mm): un cuantil
+# bootstrap por encima es un remuestreo degenerado; se excluye de las bandas de
+# confianza para que la banda superior no muestre valores imposibles.
+_MAX_PHYSICAL_MM = 1800.0
 
 
 def l_moments(sample):
@@ -177,7 +185,7 @@ def fit_lp3(maxima):
 
 def _wilson_hilferty_kt(p, skewLog):
     z = _NORMAL.inv_cdf(p)
-    if abs(skewLog) < 1e-3:
+    if abs(skewLog) < _MIN_SKEW:
         return z
     kk = skewLog / 6.0
     return (2.0 / skewLog) * (((z - kk) * kk + 1.0) ** 3 - 1.0)
@@ -200,7 +208,7 @@ def pdf_lp3(x, meanLog, stdLog, skewLog):
     if x <= 0:
         return 0.0
     y = math.log10(x)
-    if abs(skewLog) < 1e-3:
+    if abs(skewLog) < _MIN_SKEW:
         dens_y = statistics.NormalDist(meanLog, stdLog).pdf(y)
     else:
         alpha, beta, xi = _pe3_params(meanLog, stdLog, skewLog)
@@ -216,7 +224,7 @@ def cdf_lp3(x, meanLog, stdLog, skewLog):
     if x <= 0:
         return 0.0
     y = math.log10(x)
-    if abs(skewLog) < 1e-3:
+    if abs(skewLog) < _MIN_SKEW:
         return statistics.NormalDist(meanLog, stdLog).cdf(y)
     alpha, beta, xi = _pe3_params(meanLog, stdLog, skewLog)
     w = (y - xi) / beta
@@ -297,7 +305,7 @@ def dist_sample(name, params, rng):
     """Una observación simulada de la distribución (para el bootstrap)."""
     if name == "LogPearsonIII":
         my, sy, g = params["meanLog"], params["stdLog"], params["skewLog"]
-        if abs(g) < 1e-3:
+        if abs(g) < _MIN_SKEW:
             y = rng.gauss(my, sy)
         else:
             alpha, beta, xi = _pe3_params(my, sy, g)
@@ -321,7 +329,8 @@ def _percentile(sorted_vals, p):
 
 
 def _bootstrap(name, params, data, fit_fn, return_periods=(), n_boot=1000,
-               want_goodness=True, want_bands=False, alpha=0.05, band_alpha=0.10):
+               want_goodness=True, want_bands=False, alpha=0.05, band_alpha=0.10,
+               max_value=_MAX_PHYSICAL_MM):
     """Bootstrap paramétrico de UNA pasada (Lilliefors generalizado). Por cada
     remuestreo simula desde la distribución ajustada, la reajusta y mide:
     (a) AD/KS para la bondad de ajuste; (b) el cuantil por período de retorno
@@ -347,7 +356,10 @@ def _bootstrap(name, params, data, fit_fn, return_periods=(), n_boot=1000,
         if want_bands:
             for t in return_periods:
                 q = dist_quantile(name, rp, 1.0 - 1.0 / t)
-                if math.isfinite(q) and q >= 0:
+                # Techo físico: un cuantil simulado por encima del récord mundial
+                # es un remuestreo degenerado (cola LP3 explosiva); excluirlo evita
+                # bandas de confianza con valores imposibles.
+                if math.isfinite(q) and 0 <= q <= max_value:
                     q_null[t].append(q)
 
     def summarize(obs, null):
@@ -381,7 +393,8 @@ RETURN_PERIODS = (2, 5, 10, 25, 50, 100)
 _FITTERS = (("Gumbel", fit_gumbel, 2), ("GEV", fit_gev, 3), ("LogPearsonIII", fit_lp3, 3))
 
 
-def fit_all(maxima, return_periods=RETURN_PERIODS, goodness=True, bands=False, n_boot=1000):
+def fit_all(maxima, return_periods=RETURN_PERIODS, goodness=True, bands=False, n_boot=1000,
+            max_value=_MAX_PHYSICAL_MM):
     """Ajusta Gumbel, GEV y LP3; descarta las degeneradas; ordena por AIC y
     marca la recomendada (menor AIC). Cada candidata es autocontenida
     (params, logLik, aic, cuantiles por Tr, bondad si goodness=True, y bandas
@@ -411,7 +424,8 @@ def fit_all(maxima, return_periods=RETURN_PERIODS, goodness=True, bands=False, n
         }
         if goodness or bands:
             boot = _bootstrap(name, params, maxima, fit_fn, return_periods,
-                              n_boot=n_boot, want_goodness=goodness, want_bands=bands)
+                              n_boot=n_boot, want_goodness=goodness, want_bands=bands,
+                              max_value=max_value)
             if goodness:
                 cand["goodnessOfFit"] = {"andersonDarling": boot.get("andersonDarling"),
                                          "ks": boot.get("ks")}
