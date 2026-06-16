@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .config import CATALOG_DATASET_ID, CLIENT, LIMIT, MAX_WORKERS
 from .core import intentar
 from .exporting import export_by_department_municipality, write_coverage_report
-from .query_validation import quote_soql
+from .query_validation import in_clause_upper, quote_soql
 from .transform import deduplicate_observations, normalize_chunk
 
 # Atributos de filtro avanzado: etiqueta -> columna en la observación.
@@ -90,8 +90,7 @@ def cobertura_filtro(dataset_id: str, col_fecha: str, filtros_dep: list[str]) ->
 def _in_clause_avanzado(c_cat: str, vals: list[str]) -> str:
     """`upper(col) IN (...)` con cada valor ESCAPADO (quote_soql) — evita que una
     comilla en el valor rompa la consulta o permita inyección SoQL."""
-    quoted = ", ".join(quote_soql(str(v).upper()) for v in vals)
-    return f"upper({c_cat}) IN ({quoted})"
+    return in_clause_upper(c_cat, vals)
 
 
 def resolver_pool_estaciones(filtros_dep: list[str], avanzados: dict[str, list[str]]) -> set[str]:

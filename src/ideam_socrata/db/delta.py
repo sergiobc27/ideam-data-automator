@@ -27,6 +27,17 @@ from .copy_loader import load_dataframe
 logger = logging.getLogger(__name__)
 
 
+def _delta_where(col_fecha, hwm):
+    """Cláusula incremental SoQL: filas con fecha >= HWM.
+
+    Usamos ``>=`` (no ``>``) porque el HWM se trunca a segundos; con ``>``
+    estricto se perderían filas que comparten el segundo del HWM. El upsert es
+    idempotente (DO UPDATE por floating_id), así que re-incluir ese segundo no
+    duplica ni pierde filas.
+    """
+    return f"{col_fecha} >= {quote_soql(hwm.strftime('%Y-%m-%dT%H:%M:%S'))}"
+
+
 def delta_dataset(conn, dataset):
     dataset_id, col_fecha = dataset["id"], dataset["fecha_col"]
     hwm = state.get_hwm(conn, dataset_id)
@@ -34,7 +45,7 @@ def delta_dataset(conn, dataset):
         logger.info("%s sin backfill todavia; delta omitido.", dataset_id)
         return 0
 
-    where = f"{col_fecha} > {quote_soql(hwm.strftime('%Y-%m-%dT%H:%M:%S'))}"
+    where = _delta_where(col_fecha, hwm)
     rows_loaded = 0
     for page in iter_socrata_pages(dataset_id, _retry, where_str=where, order=col_fecha):
         df = normalize_chunk(page, dataset_id, col_fecha, DICT_REEMPLAZO)

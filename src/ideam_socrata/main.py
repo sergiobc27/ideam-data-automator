@@ -142,7 +142,7 @@ def main():
                                         temp_f = [f.replace("zonahidrografica", "zona_hidrografica").replace("codigoestacion", "codigo") for f in estado["filtros_base"]]
                                         for k, v in estado["resumen"]["avanzados"].items():
                                             c_api = filtros_cat.get(k, k).replace("zonahidrografica", "zona_hidrografica")
-                                            valores = ", ".join("'" + x.upper() + "'" for x in v)
+                                            valores = ", ".join(quote_soql(x.upper()) for x in v)
                                             temp_f.append(f"upper({c_api}) IN ({valores})")
                                         cat_where = " AND ".join(temp_f) if temp_f else None
                                         est_data = intentar(lambda: CLIENT.get(CATALOG_DATASET_ID, select="codigo, nombre", where=cat_where, order="nombre", limit=50000), "Catálogo")
@@ -184,7 +184,7 @@ def main():
                             temp_f = [f.replace("zonahidrografica", "zona_hidrografica").replace("codigoestacion", "codigo") for f in estado["filtros_base"]]
                             for k, v in estado["resumen"]["avanzados"].items():
                                 c_api = filtros_cat.get(k, k).replace("zonahidrografica", "zona_hidrografica")
-                                valores = ", ".join("'" + x.upper() + "'" for x in v)
+                                valores = ", ".join(quote_soql(x.upper()) for x in v)
                                 temp_f.append(f"upper({c_api}) IN ({valores})")
                             cods_enc = {e['codigo'] for e in intentar(lambda: CLIENT.get(CATALOG_DATASET_ID, select="codigo", where=" AND ".join(temp_f), limit=50000), "Pool Final") if 'codigo' in e}
                             estado["estaciones_pool"].update(cods_enc)

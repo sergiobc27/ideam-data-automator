@@ -16,6 +16,17 @@ def quote_soql(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def in_clause_upper(column, values):
+    """Build a safe ``upper(column) IN (...)`` clause with each value escaped.
+
+    Shared by the batch engine (advanced filters) and the interactive CLI so the
+    quote-escaping lives in one place; a value like ``RIO D'OR`` cannot break or
+    inject the query.
+    """
+    quoted = ", ".join(quote_soql(str(v).upper()) for v in values)
+    return f"upper({column}) IN ({quoted})"
+
+
 def date_window_clauses(date_column, start_date, end_date):
     """Build two safe SoQL clauses for a [start, end) date window.
 
@@ -56,7 +67,7 @@ def discover_department_values(client, dataset_id, retry_func, department=None, 
     where = None
     if department:
         needle = normalize_label(department)[:4]
-        where = f"upper(departamento) like '%{needle}%'"
+        where = f"upper(departamento) like {quote_soql('%' + needle + '%')}"
 
     rows = retry_func(
         lambda: client.get(

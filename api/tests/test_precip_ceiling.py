@@ -126,3 +126,69 @@ def test_monthly_climatology_conserva_min_max_para_no_precip(monkeypatch):
     mes = out["months"][0]
     assert mes["min"] == 5.0
     assert mes["max"] == 32.0
+
+
+# --- summary-stats: para precip los extremos POR LECTURA (min/max/p95) se omiten
+
+def _mock_pool_con_fila(monkeypatch, fila):
+    import contextlib
+
+    class _Cur:
+        def fetchone(self):
+            return fila
+
+    class _Conn:
+        def execute(self, *a, **k):
+            return _Cur()
+
+    class _Pool:
+        @contextlib.contextmanager
+        def connection(self):
+            yield _Conn()
+
+    monkeypatch.setattr(analytics, "pool", _Pool())
+
+
+class _SummaryPayload:
+    departments = ["ANTIOQUIA"]
+    catalogFilters = None
+    startDate = None
+    endDate = None
+
+
+def test_summary_stats_omite_extremos_por_lectura_para_precip(monkeypatch):
+    """Para precip, min/max/p95 sobre `observaciones` crudas pueden aflorar
+    valores imposibles (centinelas/sensores corruptos). Se omiten (None) y se
+    deja una nota; la media (intensidad) y los conteos se conservan."""
+    # (n, n_valid, avg, std, min, max, stations, start, end, p50, p95)
+    fila = (100, 90, 0.05, 0.1, 0.0, 99999.0, 5, None, None, 0.0, 88888.0)
+    _mock_pool_con_fila(monkeypatch, fila)
+
+    payload = _SummaryPayload()
+    payload.datasetId = analytics._PRECIP_DATASET
+    out = analytics.summary_stats(payload)
+
+    assert out["min"] is None
+    assert out["max"] is None
+    assert out["p95"] is None
+    assert out["mean"] == 0.05          # la media (intensidad) se conserva
+    assert out["note"]                  # se explica la omisión
+
+
+def test_summary_stats_conserva_extremos_para_no_precip(monkeypatch):
+    """Para datasets NO precip (p.ej. temperatura), min/max/p95 son
+    significativos y deben conservarse."""
+    from app.catalog import DATASETS
+
+    fila = (100, 90, 18.0, 3.0, 5.0, 32.0, 5, None, None, 18.0, 30.0)
+    _mock_pool_con_fila(monkeypatch, fila)
+
+    payload = _SummaryPayload()
+    payload.datasetId = next(
+        d["id"] for d in DATASETS if d["id"] != analytics._PRECIP_DATASET
+    )
+    out = analytics.summary_stats(payload)
+
+    assert out["min"] == 5.0
+    assert out["max"] == 32.0
+    assert out["p95"] == 30.0

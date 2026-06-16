@@ -227,6 +227,21 @@ def summary_stats(payload: QueryPayload):
     }
     if note:
         result["note"] = note
+    if _es_precip(dataset):
+        # Para precip, los extremos POR LECTURA (min/max/p95 sobre `observaciones`
+        # crudas) están dominados por centinelas/sensores corruptos y pueden
+        # aflorar valores imposibles; se omiten igual que en monthly-climatology
+        # (Fix #1). La media (intensidad) y los conteos se conservan.
+        for _campo in ("min", "max", "p95"):
+            result[_campo] = None
+        _nota_precip = (
+            "Para precipitación se omiten los extremos por lectura (mín/máx/p95): "
+            "valores corruptos o centinela de la fuente los hacen poco fiables. "
+            "Usa la lámina mensual (mm/mes) para magnitudes de precipitación."
+        )
+        result["note"] = (
+            f"{result['note']} {_nota_precip}" if result.get("note") else _nota_precip
+        )
     return result
 
 

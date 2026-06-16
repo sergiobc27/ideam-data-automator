@@ -8,7 +8,12 @@ permitir inyección. Las fechas (ISO, internas) también pasan por quote_soql.
 import unittest
 
 from ideam_socrata import engine
-from ideam_socrata.query_validation import quote_soql, date_window_clauses
+from ideam_socrata.query_validation import (
+    quote_soql,
+    date_window_clauses,
+    in_clause_upper,
+    discover_department_values,
+)
 
 
 class QuoteSoqlTests(unittest.TestCase):
@@ -70,6 +75,55 @@ class DateWindowClausesTests(unittest.TestCase):
         clausulas = date_window_clauses("f", "x' OR 1=1 --", "y")
         # La comilla hostil queda doblada dentro del literal (no lo cierra).
         self.assertEqual(clausulas[0], "f >= 'x'' OR 1=1 --T00:00:00.000'")
+
+
+class InClauseUpperTests(unittest.TestCase):
+    """Helper compartido `upper(col) IN (...)` — cada valor ESCAPADO.
+
+    Lo usan engine (filtros avanzados) y main (asistente interactivo); antes
+    main concatenaba comillas crudas, lo que rompía/inyectaba con valores como
+    ``RIO D'OR``.
+    """
+
+    def test_escapa_comilla_en_valor(self):
+        self.assertEqual(
+            in_clause_upper("corriente", ["RIO D'OR"]),
+            "upper(corriente) IN ('RIO D''OR')",
+        )
+
+    def test_varios_valores_se_unen_y_escapan(self):
+        self.assertEqual(
+            in_clause_upper("municipio", ["soledad", "santa fe'"]),
+            "upper(municipio) IN ('SOLEDAD', 'SANTA FE''')",
+        )
+
+
+class _FakeSocrataClient:
+    """Cliente falso que captura los kwargs de `.get` (incl. el `where`)."""
+
+    def __init__(self):
+        self.captured = {}
+
+    def get(self, dataset_id, **kwargs):
+        self.captured = dict(kwargs)
+        self.captured["dataset_id"] = dataset_id
+        return []
+
+
+def _passthrough_retry(fn, _label):
+    return fn()
+
+
+class DiscoverDepartmentLikeTests(unittest.TestCase):
+    """El LIKE de `discover_department_values` debe escapar la comilla del needle."""
+
+    def test_escapa_comilla_en_el_like(self):
+        client = _FakeSocrataClient()
+        discover_department_values(client, "abcd-1234", _passthrough_retry, department="O'X")
+        where = client.captured["where"]
+        # La comilla queda doblada dentro del literal (no lo cierra ni inyecta).
+        self.assertIn("O''X", where)
+        self.assertNotIn("'%O'X%'", where)
 
 
 if __name__ == "__main__":
