@@ -19,7 +19,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e ".[server]"
       - name: Compile
         run: python -m compileall src/ideam_socrata tests
       - name: Tests
