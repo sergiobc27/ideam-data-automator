@@ -73,8 +73,14 @@ find "$DESTINO" -name 'ideam_backup_*.sql.gz' -mtime +14 -delete
 
 # --- Subida opcional a Oracle Object Storage (Always Free) ---
 # Requiere: oci setup config (una vez) y OCI_BUCKET en el entorno.
+# Con un usuario IAM de MINIMO PRIVILEGIO (recomendado, en vez de la API key de
+# Administrator): definir tambien OCI_PROFILE (perfil en ~/.oci/config) y
+# OCI_NAMESPACE en el entorno; el usuario limitado no puede auto-descubrir el
+# namespace, asi que hay que pasarlo explicito. Sin esas vars, usa el perfil
+# DEFAULT y auto-descubre el namespace (comportamiento anterior).
 if [ -n "${OCI_BUCKET:-}" ] && command -v oci >/dev/null 2>&1; then
-  if oci os object put --bucket-name "$OCI_BUCKET" --file "$ARCHIVO" \
+  if oci os object put ${OCI_PROFILE:+--profile "$OCI_PROFILE"} ${OCI_NAMESPACE:+--namespace "$OCI_NAMESPACE"} \
+       --bucket-name "$OCI_BUCKET" --file "$ARCHIVO" \
        --name "backups/$(basename "$ARCHIVO")" --force >/dev/null 2>&1; then
     logger -t ideam-backup "subido a Object Storage: $OCI_BUCKET"
   else
