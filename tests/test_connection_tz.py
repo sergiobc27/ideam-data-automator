@@ -1,10 +1,14 @@
-"""Auditoría TZ: la sesión del ingestor NO fijaba el timezone, así que la
-consistencia UTC de los caggs (que asumen cubetas a medianoche UTC) dependía del
-default del servidor Postgres. Si ese default no es UTC, los timestamps naive de
-la ingesta se desplazarían y romperían analytics/preview en silencio.
+"""Auditoría TZ: la sesión del ingestor NO fijaba el timezone, así que dependía
+del default del servidor Postgres.
 
-La conexión del ingestor debe fijar timezone=UTC explícito, igual que el pool de
-la API fija el suyo (api/app/db.py)."""
+Verificado EN EL BOX (2026-06-16): el default del servidor es America/Bogota, y
+TODO el histórico se ingirió con esa sesión; el pool de la API (api/app/db.py) y
+el exporter (to_char) también asumen America/Bogota, de modo que las marcas de
+tiempo naive del IDEAM (hora local) hacen round-trip correcto. Por eso la
+conexión del ingestor debe fijar timezone=America/Bogota EXPLÍCITO: blinda contra
+un cambio del default del servidor SIN alterar el comportamiento. Fijar UTC aquí
+sería un error: desplazaría 5h los datos NUEVOS respecto al histórico y al
+exporter."""
 
 import unittest
 
@@ -28,13 +32,17 @@ class ConnectionTimezoneTests(unittest.TestCase):
     def tearDown(self):
         psycopg.connect = self._real_connect
 
-    def test_get_conn_fija_timezone_utc(self):
+    def test_get_conn_fija_timezone_bogota_explicito(self):
         import os
 
         os.environ["DATABASE_URL"] = "postgresql://test@localhost/test"
         connection.get_conn()
         options = self.capturado["kwargs"].get("options", "")
-        self.assertIn("timezone=UTC", options)
+        # America/Bogota (NO UTC): debe coincidir con el default del servidor,
+        # el pool de la API y el exporter, para que el histórico y los datos
+        # nuevos sean consistentes y el round-trip de hora local sea correcto.
+        self.assertIn("timezone=America/Bogota", options)
+        self.assertNotIn("timezone=UTC", options)
 
     def test_get_conn_propaga_autocommit(self):
         import os
