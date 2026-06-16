@@ -13,5 +13,12 @@ def get_dsn():
 
 
 def get_conn(autocommit=False):
-    """Single connection for ingestion jobs (the API uses its own pool)."""
-    return psycopg.connect(get_dsn(), autocommit=autocommit)
+    """Single connection for ingestion jobs (the API uses its own pool).
+
+    timezone=UTC EXPLICITO: los caggs y analytics asumen cubetas a medianoche
+    UTC (time_bucket sobre timestamptz). Los timestamps de la ingesta llegan
+    naive; sin fijar el timezone de sesion, Postgres los interpreta en el
+    default del servidor. Si ese default no fuera UTC, las series quedarian
+    desplazadas y romperian el read-side en silencio. Lo fijamos aqui como
+    unica fuente de verdad explicita, simetrico al pool de la API (app/db.py)."""
+    return psycopg.connect(get_dsn(), autocommit=autocommit, options="-c timezone=UTC")

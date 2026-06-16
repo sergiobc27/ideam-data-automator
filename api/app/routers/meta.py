@@ -1,14 +1,30 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from ..catalog import CATALOG_FILTERS, DATASETS, DEPARTMENT_MAP
 from ..db import pool
+from ..http_utils import client_ip as _client_ip
 from ..normalize import department_variants, get_dataset, validate_required_departments
+from ..ratelimit import check_rate_limit
 from ..settings import settings
 
 router = APIRouter()
+
+
+def _lectura_rate(request: Request):
+    """Gate anti-abuso por-IP del scope 'lectura' (mismo presupuesto que
+    preview/analytics/catalog). Estos endpoints tocan la DB; sin esto el único
+    freno era el cache de borde, que las ráfagas con parámetros rotados saltan."""
+    ok, _remaining, retry = check_rate_limit(
+        "lectura", _client_ip(request), settings.rate_limit_catalog_per_hour
+    )
+    if not ok:
+        raise HTTPException(
+            429,
+            f"Limite de consultas alcanzado. Intenta de nuevo en {max(retry // 60, 1)} minuto(s).",
+        )
 
 # Cota de seguridad para /api/stations.geojson: el catálogo ronda ~18K estaciones,
 # así que 50.000 deja amplísimo margen y NO recorta nada hoy; solo evita que un
@@ -72,7 +88,8 @@ def _cached_json(payload, ttl_seconds):
 
 
 @router.get("/api/meta")
-def meta():
+def meta(request: Request):
+    _lectura_rate(request)
     return _cached_json({
         "datasets": [
             {"id": d["id"], "name": d["name"], "category": d["category"], "dateColumn": d["dateColumn"]}
@@ -88,7 +105,8 @@ def meta():
 
 
 @router.get("/api/date-range")
-def date_range(datasetId: str):
+def date_range(datasetId: str, request: Request):
+    _lectura_rate(request)
     dataset = get_dataset(datasetId)
     # min/max desde obs_diario (agregado continuo): instantáneo. Sobre la
     # hypertable cruda, los datasets que terminaron en el pasado (los de mar,
@@ -117,13 +135,14 @@ def date_range(datasetId: str):
 
 
 @router.get("/api/stations.geojson")
-def stations_geojson():
+def stations_geojson(request: Request):
     """Catálogo completo de estaciones como GeoJSON para el mapa.
 
     ~18K features (≈0,5MB gzip). El catálogo cambia poco: cache de 24h en el
     borde. El BETWEEN descarta outliers de captura fuera del territorio
     colombiano (San Andrés incluido: lon hasta -82, lat hasta 14).
     """
+    _lectura_rate(request)
     with pool.connection() as conn:
         rows = conn.execute(
             "SELECT codigoestacion, nombre, categoria, tecnologia, estado, "
@@ -165,7 +184,8 @@ def stations_geojson():
 
 
 @router.get("/api/municipalities")
-def municipalities(department: list[str] = Query(default=[])):
+def municipalities(request: Request, department: list[str] = Query(default=[])):
+    _lectura_rate(request)
     canonicals = validate_required_departments(department)
     variants = set()
     for canonical in canonicals:

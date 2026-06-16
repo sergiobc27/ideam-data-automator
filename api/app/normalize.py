@@ -6,6 +6,7 @@ parámetros seguros.
 """
 
 import unicodedata
+from datetime import date, timedelta
 
 from fastapi import HTTPException
 
@@ -103,11 +104,18 @@ def build_filters(payload):
         clauses.append("upper(nombreestacion) = ANY(%(nombres)s)")
         params["nombres"] = [str(n).upper() for n in filters["stationNames"]]
 
+    # Rango medio-abierto alineado a UTC: los datos están UTC-aligned y el resto
+    # del read-side (caggs.py, preview._resumen_desde_agregado) compara contra
+    # medianoche UTC. Atar el crudo a fechas locales naive (T00:00:00 en la
+    # sesión America/Bogota = 05:00 UTC) desalineaba el borde del día y hacía que
+    # el resumen y las filas crudas discreparan ~5h. [start 00:00 UTC,
+    # (end+1) 00:00 UTC) incluye todo el día final.
     if payload.startDate:
         clauses.append("fechaobservacion >= %(start)s")
-        params["start"] = f"{payload.startDate}T00:00:00"
+        params["start"] = f"{payload.startDate}T00:00:00+00:00"
     if payload.endDate:
-        clauses.append("fechaobservacion <= %(end)s")
-        params["end"] = f"{payload.endDate}T23:59:59.999"
+        end_excl = date.fromisoformat(str(payload.endDate)) + timedelta(days=1)
+        clauses.append("fechaobservacion < %(end)s")
+        params["end"] = f"{end_excl.isoformat()}T00:00:00+00:00"
 
     return " AND ".join(clauses), params, dataset, canonicals

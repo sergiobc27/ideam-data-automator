@@ -9,6 +9,13 @@ import contextlib
 from app.routers import meta
 
 
+class _FakeRequest:
+    """Request mínimo para el gate de rate-limit (lee headers/client.host)."""
+
+    headers: dict = {}
+    client = None
+
+
 def test_geojson_lleva_limit_con_cota_alta(monkeypatch):
     capturado = {}
 
@@ -27,7 +34,7 @@ def test_geojson_lleva_limit_con_cota_alta(monkeypatch):
             yield _Conn()
 
     monkeypatch.setattr(meta, "pool", _Pool())
-    meta.stations_geojson()
+    meta.stations_geojson(_FakeRequest())
 
     sql = capturado["sql"]
     assert "LIMIT" in sql.upper()
