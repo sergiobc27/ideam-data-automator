@@ -198,6 +198,22 @@ Si uvicorn no levanta, suele ser:
 Cuando el box se pierde o la base se corrompe. **Todo es re-derivable de
 Socrata**; el unico costo es el tiempo de descarga del historico.
 
+> **Prueba de restauracion (verificada 2026-06-16).** El backup diario
+> `/var/backups/ideam/ideam_backup_*.sql.gz` se restauro en un contenedor
+> TimescaleDB temporal y aislado **sin errores**: `estaciones` (17.976 filas) e
+> `ingest_state` (116) vuelven integras. **Alcance real del backup:** es
+> `--schema-only` (toda la DDL) + `--data-only` SOLO de `ingest_state` y
+> `estaciones`. NO incluye los datos de `observaciones` ni los datos del catalogo
+> de TimescaleDB, asi que al restaurarlo `observaciones` queda como **tabla plana
+> (0 hypertables)**. Por eso el `.sql.gz` **NO es un restore standalone**: la
+> recuperacion correcta es ESTE procedimiento E (correr `schema.sql`, que recrea
+> las hypertables/caggs/compresion, + backfill desde Socrata). El backup sirve
+> para (a) conservar los high-water marks de `ingest_state` y el catalogo
+> `estaciones`, y (b) como verificacion de integridad. Las observaciones SIEMPRE
+> se re-derivan de Socrata. Atajo opcional: tras el paso 3, restaurar solo la
+> data de `ingest_state` desde el backup permite que el delta reanude sin
+> re-backfillear todo.
+
 ### 1. Base de datos (Docker TimescaleDB)
 
 ```bash
