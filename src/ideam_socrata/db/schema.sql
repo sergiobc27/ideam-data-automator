@@ -130,8 +130,9 @@ CREATE TABLE IF NOT EXISTS ingest_state (
 -- Una estación de precipitación puede tener >1 sensor midiendo la MISMA lluvia;
 -- sumarlos inflaba ×N (p.ej. Soledad 0029045190). Arquitectura:
 --   obs_diario_sensor : cagg por (estación, SENSOR, día) — NO mezcla sensores.
---   obs_diario        : VISTA que colapsa al sensor MÁS COMPLETO por día
---                       (DISTINCT ON ... n_validos DESC). Mismas columnas que antes.
+--   obs_diario        : VISTA que colapsa a UN sensor por día (DISTINCT ON),
+--                       prefiriendo el medidor real sobre el GPRS '0257' (ver Fix #2
+--                       abajo). Mismas columnas que antes.
 --   obs_mensual       : MATERIALIZED VIEW = rollup mensual de obs_diario (no puede
 --                       ser cagg: depende de una vista con DISTINCT ON). Se refresca
 --                       a diario con el job TimescaleDB refresh_obs_mensual_job
@@ -168,7 +169,16 @@ SELECT add_continuous_aggregate_policy('obs_diario_sensor',
     schedule_interval => INTERVAL '1 hour',
     if_not_exists     => TRUE);
 
--- obs_diario: colapsa al sensor más completo por día (drop-in, mismas columnas).
+-- obs_diario: colapsa a UN sensor por (estación, día). Mismas columnas (drop-in).
+-- Criterio (Fix #2, 2026-06-17 — corrige sub-reporte multi-sensor en precipitación):
+--   1) DESPRIORIZAR el GPRS de telemetría (codigosensor '0257' en precip), que
+--      SOBRE-muestrea: tiene MÁS lecturas que el medidor real '0240' y, con el viejo
+--      criterio "más lecturas" (n_validos DESC), ganaba y SUB-reportaba la lluvia
+--      (ej. SOLEDAD 0029045190 jul-2024: medidor 0240=52.6mm vs GPRS 0257=18.1mm, pero
+--      0257 tenía 20.277 lecturas vs 3.898). El IDEAM no publica jerarquía oficial de
+--      sensores; se adopta preferir el medidor de paso fijo '0240' sobre el GPRS '0257'.
+--   2) A igualdad de tipo, el de más lecturas válidas (criterio anterior).
+-- Estaciones mono-sensor: IDÉNTICO (DISTINCT ON toma su única fila, sin importar el ORDER BY).
 CREATE OR REPLACE VIEW obs_diario AS
 SELECT source_dataset_id, codigoestacion, departamento, municipio, dia,
        n, n_validos, valor_avg, valor_min, valor_max, valor_sum
@@ -178,6 +188,7 @@ FROM (
          n, n_validos, valor_avg, valor_min, valor_max, valor_sum
   FROM obs_diario_sensor
   ORDER BY source_dataset_id, codigoestacion, departamento, municipio, dia,
+           coalesce(codigosensor = '0257', false) ASC,
            n_validos DESC NULLS LAST, valor_sum DESC NULLS LAST
 ) c;
 
