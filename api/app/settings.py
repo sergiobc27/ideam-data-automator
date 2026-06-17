@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -23,9 +23,7 @@ class Settings(BaseSettings):
     export_max_bytes: int = 2_000_000_000
     export_max_active_jobs: int = 4
 
-    class Config:
-        env_prefix = ""
-        extra = "ignore"
+    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
 
 settings = Settings()
