@@ -2,6 +2,15 @@
 
 El floating_id llega como hex (lo produce ideam_socrata.transform.add_floating_id,
 unico punto de verdad) y aqui se convierte a BYTEA con decode(...,'hex').
+
+ESPEJO PURO (2026-06-17): `observaciones` es una copia EXACTA de Socrata. La
+ingesta NO filtra por rango fisico (decision del proyecto: poder compartir el
+espejo tal cual, sin modificacion). La unica desviacion es ESTRUCTURAL: filas sin
+floating_id/codigo/fecha violan NOT NULL y no son observaciones validas, asi que
+van a observaciones_rechazos (sin ellas la fila no puede materializarse). La QC
+fisica de lecturas imposibles vive ahora en la CAPA DE CALCULO (vistas/agregados +
+topes de la API), no en la ingesta; la logica de rangos sigue en
+ideam_socrata.physical_ranges para ese uso.
 """
 
 import logging
@@ -10,14 +19,7 @@ import math
 import pandas as pd
 from psycopg.types.json import Jsonb
 
-from .. import physical_ranges
-
 logger = logging.getLogger(__name__)
-
-# Cache de altitudes por estación (código sin ceros a la izquierda) para el saneo
-# de presión. Se llena una vez por proceso desde `estaciones`; la dimensión casi
-# no cambia y la ingesta es de vida corta.
-_ALTITUDES = None
 
 STAGING_COLUMNS = [
     "floating_id_hex",
@@ -56,6 +58,9 @@ def _coerce_row_for_copy(row):
     finitas y truncando textos gigantes— o (None, motivo) si le falta un campo
     obligatorio (fecha/código/floating_id) y debe desviarse a rechazos. Pura y
     testeable: NO toca la DB. Evita que una sola fila mala aborte todo el lote.
+
+    OJO: esto NO es saneo físico. Un valor numérico fuera de rango (precip
+    imposible, etc.) NO se filtra aquí: entra al espejo tal cual (espejo puro).
     """
     cells = list(row)
 
@@ -126,41 +131,13 @@ def _staging_frame(df):
     return frame.astype(object).where(pd.notna(frame), None)
 
 
-def _altitudes(conn):
-    """Mapa código-normalizado -> altitud (m) desde `estaciones`, cacheado.
-
-    Aislamiento transaccional (fix crítico): el SELECT comparte la conexión con
-    el COPY que viene después. Si falla, se hace `conn.rollback()` ANTES de
-    devolver para no dejar la transacción en estado abortado (que tumbaría el
-    COPY y todos los lotes siguientes). Un fallo NO se cachea como `{}`: se
-    devuelve un respaldo vacío para ESTE lote pero se permite reintentar en el
-    siguiente (la DB pudo recuperarse).
-    """
-    global _ALTITUDES
-    if _ALTITUDES is not None:
-        return _ALTITUDES
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT ltrim(codigoestacion, '0'), altitud FROM estaciones WHERE altitud IS NOT NULL"
-            )
-            _ALTITUDES = {code: float(alt) for code, alt in cur.fetchall()}
-        return _ALTITUDES
-    except Exception:
-        logger.exception("No se pudo cargar altitudes; el saneo de presión usará el rango de respaldo")
-        try:
-            conn.rollback()  # deshace la transacción abortada; no envenena el COPY
-        except Exception:
-            logger.exception("rollback tras fallo de altitudes también falló")
-        return {}  # respaldo SOLO para este lote; sin cachear -> reintento posible
-
-
 def _coerce_frame_rows(frame):
-    """Recorre el frame ya saneado y devuelve (filas_safe, no_cargables).
+    """Recorre el frame de staging y devuelve (filas_safe, no_cargables).
 
     `filas_safe`: lista de tuplas COPY-safe (orden STAGING_COLUMNS) listas para
     `copy.write_row`. `no_cargables`: lista de (fila_original, motivo) a desviar a
-    observaciones_rechazos. Pura (no toca DB) y testeable.
+    observaciones_rechazos (solo filas sin fecha/código/floating_id). Pura (no
+    toca DB) y testeable.
     """
     safe_rows = []
     no_cargables = []
@@ -189,8 +166,9 @@ def _raw_from_row(row):
 
 
 def _record_rejection_rows(cur, no_cargables):
-    """Aparta a observaciones_rechazos filas COPY-no-cargables (fecha/código
-    ausentes). Mismo destino que el saneo físico: el dato no se pierde."""
+    """Aparta a observaciones_rechazos filas ESTRUCTURALMENTE no cargables
+    (fecha/código/floating_id ausentes). No es saneo físico: solo filas que
+    violarían NOT NULL. El dato no se pierde (queda en rechazos)."""
     rows = []
     for row, motivo in no_cargables:
         raw = _raw_from_row(row)
@@ -201,37 +179,6 @@ def _record_rejection_rows(cur, no_cargables):
     )
 
 
-def _record_rejections(cur, rejected):
-    """Aparta a observaciones_rechazos las filas físicamente imposibles (con su
-    motivo y la fila cruda en JSONB). No destructivo: el dato no se pierde."""
-    rows = []
-    for rec in rejected.to_dict("records"):
-        motivo = rec.pop("motivo", None)
-        dataset_id = rec.get("source_dataset_id")
-        raw = {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in rec.items()}
-        rows.append((dataset_id, Jsonb(raw), motivo))
-    cur.executemany(
-        "INSERT INTO observaciones_rechazos (source_dataset_id, raw, motivo) VALUES (%s, %s, %s)",
-        rows,
-    )
-
-
-def _sanitize(conn, frame):
-    """Parte el frame de staging en (aceptado, rechazado) por rango físico.
-    Defensivo: ante cualquier fallo, devuelve el frame sin filtrar (no se pierde
-    dato ni se rompe la ingesta)."""
-    if frame.empty:
-        return frame, frame.iloc[0:0]
-    try:
-        dataset_id = next((d for d in frame["source_dataset_id"] if d is not None), None)
-        if dataset_id is None:
-            return frame, frame.iloc[0:0]
-        return physical_ranges.split_frame(frame, dataset_id, _altitudes(conn))
-    except Exception:
-        logger.exception("Saneo físico falló; se ingiere el lote sin filtrar")
-        return frame, frame.iloc[0:0]
-
-
 def load_dataframe(conn, df, mode="insert"):
     """COPY del dataframe normalizado a staging temporal y upsert a observaciones.
 
@@ -239,26 +186,22 @@ def load_dataframe(conn, df, mode="insert"):
     paralelo tiene la suya, sin contención entre sí.
     mode='insert' (backfill, DO NOTHING) | mode='upsert' (delta, DO UPDATE).
     Devuelve filas efectivamente insertadas/actualizadas en observaciones.
+
+    ESPEJO PURO: NO hay saneo físico. Toda fila estructuralmente válida entra a
+    observaciones tal cual viene de Socrata. Solo se desvían a rechazos las filas
+    sin fecha/código/floating_id (no cargables), para que una fila mala no aborte
+    el lote.
     """
     if df is None or df.empty:
         return 0
 
     frame = _staging_frame(df)
-    # Saneo físico (auditoría 2026-06-15): aparta lecturas imposibles a
-    # observaciones_rechazos antes del upsert. Mismo conn/transacción = atómico.
-    frame, rejected = _sanitize(conn, frame)
-    # Coacción COPY-safe (fix crítico): las filas aceptadas por el saneo aún
-    # pueden traer celdas que abortarían el COPY (fecha NaT, valor no finito,
-    # texto gigante). Se anulan/truncan las recuperables y se DESVÍAN las no
-    # cargables a `no_cargables`, de modo que una sola fila mala nunca tumba el
-    # lote entero (ni el rollback que perdería los rechazos ya insertados).
+    # Solo coacción COPY-safe + desvío estructural. SIN filtro de rango físico.
     safe_rows, no_cargables = _coerce_frame_rows(frame)
     sql = UPSERT_UPDATE if mode == "upsert" else UPSERT_INSERT
 
     affected = 0
     with conn.cursor() as cur:
-        if not rejected.empty:
-            _record_rejections(cur, rejected)
         if no_cargables:
             _record_rejection_rows(cur, no_cargables)
         if safe_rows:
@@ -275,8 +218,10 @@ def load_dataframe(conn, df, mode="insert"):
             affected = cur.rowcount
     conn.commit()
 
-    apartadas = len(rejected) + len(no_cargables)
-    if apartadas:
-        logger.info("Saneo: %s fila(s) apartada(s) a observaciones_rechazos", apartadas)
+    if no_cargables:
+        logger.info(
+            "Ingesta: %s fila(s) no cargable(s) (sin fecha/código) a observaciones_rechazos",
+            len(no_cargables),
+        )
     logger.debug("Lote cargado: staged=%s afectadas=%s mode=%s", len(safe_rows), affected, mode)
     return affected
