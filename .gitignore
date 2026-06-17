@@ -34,6 +34,8 @@ docs/*
 !docs/HISTORIA.md
 !docs/SERVIDOR.md
 !docs/RUNBOOK.md
+# Artefactos de validacion IDF (insumos de la tesis: reproducibles y citables)
+!docs/validacion/
 logs/
 scratch/
 *.log
