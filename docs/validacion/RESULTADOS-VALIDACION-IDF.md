@@ -91,9 +91,41 @@ Antes del lote ≥15a se validó la única estación con curva oficial individua
   misread); su μ=0.29 es de los anómalos del modelo regionalizado.
 Datos en [comparacion-gonzalez2023.csv](comparacion-gonzalez2023.csv).
 
+## Ampliación: 20 estaciones de 10–14 años (registro medio)
+
+Para extender la cobertura **sin diluir** el resultado con las curvas regionalizadas
+anómalas, se validó un segundo lote acotado: las **20 estaciones de 10–14 años con
+μ>0.50** (curvas de González físicamente plausibles), generado de forma reproducible
+con [`scripts/generar_comparacion_idf.py`](../../scripts/generar_comparacion_idf.py).
+Datos en [comparacion-gonzalez2023-10a14.csv](comparacion-gonzalez2023-10a14.csv)
+(792 filas; algunas estaciones traen <42 puntos porque la plataforma no emite curva
+donde el ajuste no resulta monótono en registros cortos).
+
+**MAPE global 36.7 %**, pero —igual que el lote ≥15a— muy heterogéneo y dominado por
+unos pocos atípicos (**mediana 23.4 %**). Distribución por estación:
+
+- **9 de 20 validan publicable** (MAPE <20 %), de ellas **3 excelentes** (<15 %):
+  MARENGO (11.9 %), VILLA TERESA (13.6 %), BATALLÓN ROOKE (13.7 %), CAJAMARCA (15.6 %),
+  ARRANCAPLUMAS (16.3 %), MOGOTES (16.7 %), SAN CAYETANO (16.7 %), PURACÉ (18.9 %),
+  CANTERAS (19.7 %).
+- **7 en zona de revisión** (20–30 %): IDEAM BOGOTÁ, INZÁ, HDA. SANTA ANA,
+  ALCALDÍA DE HERRÁN, LA MORA, MURILLO, LA PLATA.
+- **4 atípicos** (>40 %) que inflan la media: PUERTO SALGAR (43 %), NATAIMA (79 %),
+  LA PAULINA (125 %), AEROPUERTO LOS GARZONES (145 %).
+
+**Lectura:** la tasa de validación (9/20 ≈ 45 %) es coherente con el lote largo
+(6/13 ≈ 46 %): donde la curva oficial es físicamente razonable, la plataforma la
+reproduce. **Sumando ambos lotes, 15 estaciones validan publicable** en la red 10-min.
+Los atípicos (registros de 10–11 años, o zonas de posible mezcla de sensores de
+precipitación como LOS GARZONES/Córdoba y LA PAULINA/La Guajira) quedan como candidatos
+a revisar con el **Fix #2** de datos, no como fallo del cálculo.
+
 ## Reproducir
 
 1. `GET /api/analytics/idf-stations` → estaciones + años.
-2. `POST /api/analytics/idf` con `{"datasetId":"s54a-sgyg","catalogFilters":{"stations":["<código>"]}}` → I_plataforma.
+2. `POST /api/analytics/idf` con `{"datasetId":"s54a-sgyg","catalogFilters":{"stations":["<código>"]}}` → I_plataforma (`intensityMmH` de las `curves`).
 3. I_oficial = `τ·Tr^ρ/(d+d0)^μ` con los coeficientes de González por estación.
 4. `python scripts/validar_idf.py <csv>` → MAPE + veredicto.
+
+Los pasos 2–3 están automatizados en `scripts/generar_comparacion_idf.py` (arma el CSV
+para un subconjunto del cruce, p.ej. `--min-anios 10 --max-anios 14 --min-mu 0.50`).
