@@ -14,6 +14,66 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
 > hidrometeorológicas, superación de los límites de la API Socrata y evolución
 > hacia una plataforma web de monitoreo y análisis hídrico.
 
+## [1.1.0] - 2026-06-19
+
+*Endurecimiento de correctitud y robustez tras dos rondas de auditoría. La CLI y
+la TUI son **compatibles hacia atrás**: no cambian los comandos, los formatos de
+salida ni los `floating_id`. El grueso del trabajo fue del **modo servidor**; los
+cambios que afectan a quien usa la herramienta por terminal van primero.*
+
+### Herramienta de terminal (CLI + TUI)
+
+#### Corregido
+- **Consultas a Socrata más robustas (escape SoQL)**: los filtros que la CLI envía
+  a `datos.gov.co` (el `$where` por departamento, estación y rango de fechas) ahora
+  escapan correctamente los literales. Antes, un valor con una comilla o un
+  carácter inusual podía romper o alterar la consulta. (El mismo blindaje protege
+  al ingestor del modo servidor, donde se procesan miles de valores de forma
+  automática.)
+- **`--end-date` ahora es exclusivo de verdad**: las ventanas de fechas quedan
+  recortadas exactas, sin arrastrar el día final por error.
+- Mayor robustez general y rutas de salida predecibles.
+
+#### Agregado
+- **Aviso permanente en la TUI** sobre el alcance de la fuente: `datos.gov.co`
+  publica la telemetría de las estaciones **automáticas** (que empezaron a
+  reportar hacia ~2016); las series **convencionales históricas** viven en el
+  portal **DHIME** del IDEAM.
+- **7 quick-wins de UX** de la auditoría de producto en la interfaz interactiva.
+
+### Modo servidor (extra `[server]`: espejo PostgreSQL/TimescaleDB e ingesta)
+
+*Solo afecta a quien levanta el espejo de datos; la CLI local no lo necesita.*
+
+#### Cambiado
+- **El espejo de Socrata es ahora una copia PURA**: se retiró el saneo físico
+  durante la ingesta; el espejo refleja exactamente lo publicado por la fuente y
+  el control de calidad físico se reserva para la capa de cálculo (el módulo
+  `physical_ranges.py` queda disponible para ese uso).
+
+#### Corregido
+- **Bug de precipitación multi-sensor**: en estaciones con varios sensores las
+  láminas se inflaban porque los sensores se sumaban. Los agregados diario y
+  mensual son ahora *sensor-aware* (usan el sensor más completo por periodo, no
+  la suma) y `obs_diario` prefiere el medidor real sobre el sensor GPRS
+  sub-reportador.
+- **Zona horaria**: la conexión del ingestor fija `America/Bogota` (antes UTC).
+- El `COPY` de ingesta ya no aborta el lote entero por una sola fila inválida;
+  las altitudes se cargan en su propia transacción. Backfill más robusto: pico de
+  disco acotado al liberar los `.csv.gz` tras el split, `--max-time` en `curl`
+  contra cuelgues de primer byte y casts `timestamptz` correctos al refrescar
+  agregados.
+
+#### Agregado
+- Carga local del espejo desde exports masivos `.csv.gz` (divididos por año), para
+  sembrar la base sin re-descargar vía API.
+
+### Otros
+- Artefactos de **validación IDF externa** (comparación con González 2023, misma
+  red de 10 min) y procedimiento reproducible en `docs/validacion/`.
+- Cobertura de pruebas ampliada (escape SoQL, zona horaria, espejo puro, rangos
+  físicos y validación IDF): la suite supera ahora las **79 pruebas**.
+
 ## [1.0.3] - 2026-06-05
 
 *Versión de endurecimiento tras una auditoría integral multi-rol (arquitectura,
