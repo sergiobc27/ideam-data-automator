@@ -10,7 +10,7 @@ hidrometeorológicos del IDEAM publicados en Socrata / Datos Abiertos Colombia
 (`www.datos.gov.co`), directamente a tu PC.
 
 Desarrollada como Trabajo de Grado de Ingeniería Civil en la Universidad de la
-Costa (CUC), Barranquilla — automatiza en minutos lo que manualmente toma horas:
+Costa (CUC), Barranquilla. Automatiza en minutos lo que manualmente toma horas:
 consultar estación por estación en los portales del IDEAM, descargar, limpiar
 y organizar los archivos.
 
@@ -47,16 +47,16 @@ ideam-socrata tui
 Asistente de pantalla completa con navegación por flechas, selección con
 checkmarks y panel de resumen en vivo:
 
-1. **Variable** — las 21 variables del IDEAM (precipitación, niveles de río y mar,
+1. **Variable**: las 21 variables del IDEAM (precipitación, niveles de río y mar,
    temperaturas, viento, humedad, presión, calidad de aire/agua, y más), con buscador.
    Son **13 datasets estándar** (las series hidrometeorológicas que suman
    ≈745 millones de observaciones) más **8 variables especiales**: 13 + 8 = 21.
-2. **Departamentos** — selección múltiple + filtros avanzados por zona
+2. **Departamentos**: selección múltiple + filtros avanzados por zona
    hidrográfica, categoría, tecnología, estado, corriente, entidad, municipio
    o códigos de estación manuales.
-3. **Años** — detecta el histórico disponible **para tu filtro** (estaciones y
+3. **Años**: detecta el histórico disponible **para tu filtro** (estaciones y
    rango real de fechas) antes de descargar.
-4. **Descarga** — paralela, con progreso en vivo (filas/s, bloques, tiempo restante).
+4. **Descarga**: paralela, con progreso en vivo (filas/s, bloques, tiempo restante).
 
 ### Asistente clásico de consola
 
@@ -105,8 +105,8 @@ SOCRATA_TIMEOUT=300
 ```
 
 Para la herramienta local basta con un solo `SOCRATA_APP_TOKEN`. El modo
-servidor (espejo completo) usa en cambio `SOCRATA_APP_TOKENS` —en plural, varios
-tokens separados por coma que se rotan en round-robin— para sostener las
+servidor (espejo completo) usa en cambio `SOCRATA_APP_TOKENS` (en plural, varios
+tokens separados por coma que se rotan en round-robin) para sostener las
 descargas masivas; ver [docs/SERVIDOR.md](docs/SERVIDOR.md).
 
 ## Estructura
