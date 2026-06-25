@@ -3,10 +3,12 @@
 Adaptación del asistente interactivo clásico (ideam_socrata.main) al estilo
 Textual (cajas seleccionables, navegación por flechas, checkmarks, panel de
 resumen en vivo), conservando logo CUC, aviso legal, las 21 variables y el
-flujo de pasos. Se construye por etapas:
-  Etapa 1 (esta): aviso legal + variables + departamentos + años + panel-resumen.
-  Etapa 2: filtros avanzados (catálogo: zona, categoría, estación, ...).
-  Etapa 3: motor de descarga (core.py en modo silencioso).
+flujo de pasos.
+
+Look moderno (rediseño 2026): tema propio CUC oscuro, cajas con relieve y
+título en el borde, barra de pasos (stepper), barra de descarga con gradiente,
+transiciones con deslizamiento, micro-interacciones en botones y validación en
+vivo del rango de años.
 
 Lanzar con:  ideam-socrata tui
 """
@@ -20,16 +22,20 @@ from pathlib import Path
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
+from textual.color import Gradient
 from textual.command import Hit, Hits, Provider
 from textual.content import Content
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.reactive import reactive
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import (
     Button,
     Footer,
     Header,
     Input,
     Label,
+    LoadingIndicator,
     OptionList,
     ProgressBar,
     SelectionList,
@@ -47,22 +53,55 @@ from .ui import build_logo_text
 DATASETS_ESTANDAR = [d for d in DATASETS_INFO if d.get("tipo") == "estandar"]
 DEPARTAMENTOS = sorted(MAPEO_DEPARTAMENTOS)
 
-# Paleta Universidad de la Costa (CUC)
+# Paleta Universidad de la Costa (CUC) — colores de marca.
 ROJO = "#A3161A"
 AMARILLO = "#FCD116"
 GRIS = "#A5A5A5"
 
+# Tema propio de la app: rojo y amarillo CUC como ACENTOS sobre un fondo
+# gris-azulado oscuro (no negro puro). Registrarlo deja que todo el CSS y la
+# marcación usen variables ($accent, $primary, $surface…), así cambiar la paleta
+# es un solo sitio y se gana modo claro/oscuro gratis.
+CUC_THEME = Theme(
+    name="cuc",
+    primary=ROJO,            # identidad institucional / errores
+    secondary="#C9A227",
+    accent=AMARILLO,         # foco, acción, paso activo, progreso
+    background="#1a1a22",    # fondo neutro (no negro puro: cansa menos la vista)
+    surface="#26262f",       # superficie de las cajas (relieve sobre el fondo)
+    panel="#313140",         # zonas destacadas (listas, resumen)
+    success="#a6e3a1",
+    warning="#f9e2af",
+    error=ROJO,
+    dark=True,
+    # Regla de marca: el AMARILLO marca "dónde actuar ahora" (foco, cursor de
+    # lista), el rojo queda reservado para identidad/errores. Por defecto Textual
+    # deriva el borde de foco y el cursor de lista del primary (rojo) → se
+    # redirigen al amarillo para que el foco no se lea como alerta.
+    variables={
+        "border": AMARILLO,
+        "block-cursor-foreground": "#1a1a22",
+        "block-cursor-background": AMARILLO,
+        "block-cursor-text-style": "bold",
+        # variante "desenfocada" (lista sin foco): tinte amarillo tenue, no rojo
+        "block-cursor-blurred-foreground": "#e0e0e8",
+        "block-cursor-blurred-background": f"{AMARILLO} 20%",
+        "block-cursor-blurred-text-style": "none",
+        "input-selection-background": f"{AMARILLO} 35%",
+    },
+)
+
 PRESENTACION = (
-    "[bold]AUTOMATIZACIÓN INTELIGENTE PARA LA GESTIÓN VISUAL DE DATOS "
-    "HÍDRICOS DEL IDEAM[/bold]\n"
-    "Proyecto de Tesis de Pregrado – Ingeniería Civil\n\n"
+    "[bold]Automatización inteligente para la gestión visual de datos "
+    "hídricos del IDEAM[/bold]\n"
+    "Proyecto de Tesis de Pregrado · Ingeniería Civil\n\n"
     "Autor: Sergio Beltrán Coley\n"
     "Tutora: Ing. Carol Prada Sánchez   ·   Cotutor: Ing. Sebastián Quintero Merchán\n"
-    "Universidad de la Costa – Barranquilla, Colombia"
+    "Universidad de la Costa · Barranquilla, Colombia"
 )
 
 AVISO_LEGAL = (
-    "[bold]ACUERDO DE USO ACADÉMICO E INVESTIGATIVO[/bold]\n\n"
+    "[bold]Acuerdo de uso académico e investigativo[/bold]\n\n"
     "Al continuar, usted manifiesta estar de acuerdo con:\n"
     "  • El uso de los datos es exclusivamente para fines académicos e investigativos.\n"
     "  • La información proviene del IDEAM bajo la Política de Datos Abiertos de Colombia.\n"
@@ -122,7 +161,7 @@ _SHIMMER_BASE = "#4a4a4a"
 
 
 class Shimmer(Static):
-    """Texto con un brillo en movimiento (efecto 'cargando' fluido tipo Claude)."""
+    """Texto con un brillo en movimiento (la 'firma' animada de la app)."""
 
     def __init__(self, texto: str = "", **kw) -> None:
         super().__init__(**kw)
@@ -137,7 +176,15 @@ class Shimmer(Static):
     def on_mount(self) -> None:
         self._timer = self.set_interval(0.09, self._tick)
 
+    def on_unmount(self) -> None:
+        # No dejar el timer corriendo cuando el widget desaparece de pantalla.
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+
     def _tick(self) -> None:
+        if not self._texto:  # nada que pintar: no repintar en vano
+            return
         self._pos = (self._pos + 1) % (len(self._texto) + len(_SHIMMER) + 6)
         self.update(self._render())
 
@@ -162,13 +209,40 @@ class Shimmer(Static):
         return Content.from_rich_text(t)
 
 
+class StepBar(Static):
+    """Barra de progreso de pasos (píldoras) sobre el asistente.
+
+    Paso activo resaltado en amarillo, pasos hechos con ✓ verde, futuros
+    apagados. Reactiva: basta con asignar ``stepper.paso = n``.
+    """
+
+    paso = reactive(0)
+    _PASOS = ("Variable", "Deptos", "Años", "Descarga")
+
+    def watch_paso(self, paso: int) -> None:
+        if paso < 1:
+            self.update("")  # en el aviso legal aún no hay pasos
+            return
+        pildoras = []
+        for i, nombre in enumerate(self._PASOS, start=1):
+            if i < paso:
+                pildoras.append(f"[$success bold] ✓ {nombre} [/]")
+            elif i == paso:
+                pildoras.append(f"[bold $background on $accent] {i} · {nombre} [/]")
+            else:
+                pildoras.append(f"[$text-disabled] {i} · {nombre} [/]")
+        self.update("  [$text-disabled]→[/]  ".join(pildoras))
+
+
 class ValuePicker(ModalScreen):
     """Selector multi-valor de un atributo del catálogo (carga en vivo)."""
 
-    CSS = f"""
-    ValuePicker {{ align: center middle; }}
-    #vp {{ border: round {AMARILLO}; background: $surface; padding: 1 2; width: 70%; height: auto; max-height: 85%; }}
-    #vp Button {{ margin: 1 1 0 0; }}
+    CSS = """
+    ValuePicker { align: center middle; }
+    #vp { border: round $accent; background: $surface; padding: 1 2; width: 70%; height: auto; max-height: 85%; }
+    #vp Button { margin: 1 1 0 0; transition: background 120ms; }
+    #vp Button:hover { background: $accent 20%; text-style: bold; }
+    #vp-list { background: $panel; }
     """
 
     def __init__(self, etiqueta, col, filtros_dep, preseleccion):
@@ -178,13 +252,15 @@ class ValuePicker(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="vp"):
-            yield Shimmer(f"⏳ Cargando opciones de {self.etiqueta}…", id="vp-tit")
+            yield Static(f"[$accent bold]{self.etiqueta}[/] — cargando opciones…", id="vp-tit")
             yield SelectionList(id="vp-list")
             with Horizontal():
                 yield Button("Cancelar", id="vp-cancel")
-                yield Button("Aceptar ✓", id="vp-ok", variant="primary")
+                yield Button("Aceptar ✓", id="vp-ok", variant="success")
 
     def on_mount(self) -> None:
+        # spinner nativo mientras llega el catálogo (en vez del shimmer casero)
+        self.query_one("#vp-list", SelectionList).loading = True
         self._cargar()
 
     @work(thread=True)
@@ -200,8 +276,9 @@ class ValuePicker(ModalScreen):
         sl = self.query_one("#vp-list", SelectionList)
         for v in vals:
             sl.add_option(Selection(v, v, v in self.preseleccion))
-        self.query_one("#vp-tit", Shimmer).detener(
-            f"[b]{self.etiqueta}[/b] — Espacio marca ✓ · {len(vals)} opciones")
+        sl.loading = False
+        self.query_one("#vp-tit", Static).update(
+            f"[$accent bold]{self.etiqueta}[/] — Espacio marca ✓ · {len(vals)} opciones")
 
     @on(Button.Pressed, "#vp-ok")
     def _ok(self) -> None:
@@ -215,11 +292,12 @@ class ValuePicker(ModalScreen):
 class FiltrosScreen(ModalScreen):
     """Menú de filtros avanzados: las 7 categorías + códigos manuales."""
 
-    CSS = f"""
-    FiltrosScreen {{ align: center middle; }}
-    #fs {{ border: round {AMARILLO}; background: $surface; padding: 1 2; width: 80%; height: auto; max-height: 90%; }}
-    #fs Button {{ width: 100%; margin: 0 0 1 0; }}
-    #fs-volver {{ width: auto; }}
+    CSS = """
+    FiltrosScreen { align: center middle; }
+    #fs { border: round $accent; background: $surface; padding: 1 2; width: 80%; height: auto; max-height: 90%; }
+    #fs Button { width: 100%; margin: 0 0 1 0; transition: background 120ms; }
+    #fs Button:hover { background: $accent 20%; text-style: bold; }
+    #fs-volver { width: auto; }
     """
 
     def __init__(self, filtros_dep):
@@ -232,14 +310,14 @@ class FiltrosScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="fs"):
-            yield Static("[b]Filtros avanzados[/b] · catálogo de estaciones (opcional)", classes="titulo")
+            yield Static("[$accent bold]Filtros avanzados[/] · catálogo de estaciones (opcional)")
             yield Static("Elige una categoría para filtrar; se combinan entre sí.", classes="pista")
             for etiqueta, col in ATRIBUTOS_AVANZADOS.items():
                 n = len(self.app.avanzados.get(col, []))
                 yield Button(self._lbl(etiqueta, n), id=f"attr-{col}")
             yield Label("Códigos de estación manuales (separados por coma):")
             yield Input(value=", ".join(sorted(self.app.codigos_manuales)), id="fs-codigos")
-            yield Button("← Listo / Volver", id="fs-volver", variant="primary")
+            yield Button("← Listo / Volver", id="fs-volver", variant="success")
 
     @on(Button.Pressed)
     def _click(self, ev: Button.Pressed) -> None:
@@ -290,26 +368,43 @@ class IdeamTUI(App):
     SUB_TITLE = "Asistente de descarga"
     COMMANDS = App.COMMANDS | {ComandosIdeam}
 
-    CSS = f"""
-    Screen {{ align: center top; }}
-    #logo {{ color: {ROJO}; padding: 0; height: auto; text-align: center; }}
-    #tagline {{ text-align: center; text-style: bold; padding: 1 0 0 0; height: auto; }}
-    #cuerpo {{ height: 1fr; align: center top; }}
-    .paso {{ border: round {AMARILLO}; padding: 1 2; margin: 1 2; height: auto; max-width: 112; }}
-    .legal {{ border: round {ROJO}; padding: 1 2; margin: 1 2; height: auto; }}
-    .titulo {{ color: {AMARILLO}; text-style: bold; margin-bottom: 1; }}
-    .pista {{ color: {GRIS}; }}
-    .presentacion {{ color: {GRIS}; padding: 0 2; text-align: center; }}
-    OptionList {{ height: auto; max-height: 18; }}
-    SelectionList {{ height: auto; max-height: 18; }}
-    Input {{ margin: 1 0; }}
-    #fila-fechas {{ height: auto; }}
-    #fila-fechas Vertical {{ width: 1fr; padding-right: 2; height: auto; }}
-    #botones {{ height: auto; align: center middle; padding-top: 1; }}
-    Button {{ margin: 0 1; }}
-    #resumen {{ border: round {GRIS}; padding: 0 1; margin: 0 2; color: {GRIS}; height: auto; max-width: 112; }}
-    #estado {{ padding: 1 0; }}
-    ProgressBar {{ margin: 1 0; }}
+    CSS = """
+    Screen { align: center top; background: $background; }
+    #logo { color: $primary; padding: 0; height: auto; text-align: center; }
+    #tagline { text-align: center; text-style: bold; padding: 1 0 0 0; height: auto; }
+    #stepper { width: 100%; height: auto; content-align: center middle; padding: 1 0 0 0; }
+    #cuerpo { height: 1fr; align: center top; }
+
+    /* Cada paso es una 'tarjeta' que flota sobre el fondo, con el título en el borde. */
+    .paso {
+        background: $surface;
+        border: round $accent;
+        border-title-color: $accent;
+        border-title-style: bold;
+        border-subtitle-color: $text-muted;
+        padding: 1 2; margin: 1 2; height: auto; max-width: 112;
+    }
+    .legal { border: round $primary; background: $panel; padding: 1 2; margin: 1 0; height: auto; }
+    .pista { color: $text-muted; }
+    .presentacion { color: $text-muted; padding: 0 2; text-align: center; }
+
+    OptionList { height: auto; max-height: 18; background: $panel; }
+    SelectionList { height: auto; max-height: 18; background: $panel; }
+    Input { margin: 1 0; }
+    Input.error { border: tall $error; }
+    #fila-fechas { height: auto; }
+    #fila-fechas Vertical { width: 1fr; padding-right: 2; height: auto; }
+    #botones { height: auto; align: center middle; padding-top: 1; }
+
+    /* Micro-interacciones: los botones reaccionan al mouse y al foco de teclado. */
+    Button { margin: 0 1; transition: background 120ms, color 120ms; }
+    Button:hover { background: $accent 20%; text-style: bold; }
+    Button:focus { background: $accent 30%; text-style: bold; }
+
+    #resumen { padding: 0 1; margin: 0 2; color: $text-muted; height: auto; max-width: 112; content-align: center middle; }
+    #estado { padding: 1 0; }
+    #rango-load { height: 1; }
+    ProgressBar { margin: 1 0; }
     """
 
     BINDINGS = [
@@ -350,20 +445,28 @@ class IdeamTUI(App):
     # ---------- composición base ----------
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        yield StepBar(id="stepper")
         yield Static(id="resumen")
         yield VerticalScroll(id="cuerpo")
         yield Footer()
 
     def on_mount(self) -> None:
+        self.register_theme(CUC_THEME)
+        self.theme = "cuc"
         self._render()
 
     # ---------- panel-resumen (siempre visible) ----------
     def _refrescar_resumen(self) -> None:
+        self.query_one("#stepper", StepBar).paso = self.paso
         var = self.sel_dataset["nombre"] if self.sel_dataset else "—"
         dep = ", ".join(self.sel_departamentos) if self.sel_departamentos else "—"
         anios = f"{self._anio_ini}–{self._anio_fin}" if self._anio_ini else "—"
+
         def marca(activo, hecho):
-            return "[green]✔[/green]" if hecho else ("[yellow]➤[/yellow]" if activo else "·")
+            if hecho:
+                return "[$success]✔[/]"
+            return "[$accent]➤[/]" if activo else "[$text-disabled]·[/]"
+
         linea = (
             f"{marca(self.paso==1, self.sel_dataset is not None)} Variable: [b]{var}[/b]   "
             f"{marca(self.paso==2, bool(self.sel_departamentos))} Deptos: [b]{dep}[/b]   "
@@ -372,6 +475,17 @@ class IdeamTUI(App):
         self.query_one("#resumen", Static).update(linea)
 
     # ---------- navegación ----------
+    def _titulo_paso(self) -> tuple[str, str]:
+        """Título y subtítulo (van EN el borde de la tarjeta del paso)."""
+        nombre = self.sel_dataset["nombre"] if self.sel_dataset else ""
+        return {
+            0: ("  IDEAM Data Automator  ", "  Acuerdo de uso académico  "),
+            1: ("  Paso 1 · Elige la variable  ", "  escribe para filtrar · ↓ lista · Enter elige  "),
+            2: (f"  Paso 2 · Departamentos · {nombre}  ", "  ↑↓ navegar · Espacio marca ✓ · varios  "),
+            3: ("  Paso 3 · Rango de años  ", "  revisa el rango y pulsa Descargar  "),
+            4: (f"  {emoji_de(nombre)} {nombre}  ", "  descargando…  "),
+        }[self.paso]
+
     def _render(self) -> None:
         self._refrescar_resumen()
         cuerpo = self.query_one("#cuerpo", VerticalScroll)
@@ -379,10 +493,11 @@ class IdeamTUI(App):
         builder = {0: self._aviso, 1: self._variables, 2: self._departamentos,
                    3: self._anios, 4: self._descarga}[self.paso]
         panel = builder()
+        titulo, subtitulo = self._titulo_paso()
+        panel.border_title = titulo
+        panel.border_subtitle = subtitulo
         cuerpo.mount(panel)
-        # transición suave: aparece con un leve fundido
-        panel.styles.opacity = 0.0
-        panel.styles.animate("opacity", value=1.0, duration=0.28)
+        self._animar_entrada(panel)
         foco = {1: "#buscar-var", 2: "#lista-deptos", 3: "#f-ini"}.get(self.paso)
         if foco:
             self.call_after_refresh(lambda s=foco: self.query_one(s).focus())
@@ -390,6 +505,11 @@ class IdeamTUI(App):
             self._detectar_anios()
         if self.paso == 4:
             self._descargar_worker()
+
+    def _animar_entrada(self, panel) -> None:
+        """Fundido suave al entrar cada paso."""
+        panel.styles.opacity = 0.0
+        panel.styles.animate("opacity", value=1.0, duration=0.28, easing="out_cubic")
 
     def action_atras(self) -> None:
         if not (0 < self.paso < 4):
@@ -410,9 +530,9 @@ class IdeamTUI(App):
 
     # ---------- paso 0: aviso legal + presentación ----------
     def _aviso(self) -> Vertical:
-        rechazar = Button("No acepto (salir)", id="rechazar")
+        rechazar = Button("No acepto (salir)", id="rechazar", variant="error")
         rechazar.tooltip = "Cierra el asistente sin descargar nada."
-        aceptar = Button("Acepto los términos →", id="aceptar", variant="primary")
+        aceptar = Button("Acepto los términos →", id="aceptar", variant="success")
         aceptar.tooltip = "Aceptas el uso académico e investigativo y entras al asistente."
         return Vertical(
             Static(Content.from_rich_text(build_logo_text()), id="logo"),
@@ -448,8 +568,6 @@ class IdeamTUI(App):
 
     def _variables(self) -> Vertical:
         return Vertical(
-            Static("Paso 1 · Elige la variable a descargar", classes="titulo"),
-            Static("Escribe para filtrar · ↓ entra a la lista · Enter elige", classes="pista"),
             Input(placeholder="🔍 filtrar variables…", id="buscar-var"),
             OptionList(*self._opciones_var(), id="lista-var"),
             classes="paso",
@@ -497,7 +615,7 @@ class IdeamTUI(App):
         sels = [Selection(dep.title(), dep) for dep in DEPARTAMENTOS]
         b_atras = Button("← Atrás", id="atras")
         b_atras.tooltip = "Vuelve a elegir la variable."
-        b_cont = Button("Continuar →", id="cont-deptos", variant="primary")
+        b_cont = Button("Continuar →", id="cont-deptos", variant="success")
         b_cont.tooltip = "Pasa al rango de años." if self._tiene_anios() else "Pasa a la descarga."
         botones = [b_atras]
         if self.sel_dataset.get("tipo") == "estandar":
@@ -506,8 +624,6 @@ class IdeamTUI(App):
             botones.append(b_filtros)
         botones.append(b_cont)
         return Vertical(
-            Static(f"Paso 2 · Departamentos · {self.sel_dataset['nombre']}", classes="titulo"),
-            Static("↑↓ navegar · Espacio marca ✓ · puedes elegir varios", classes="pista"),
             SelectionList(*sels, id="lista-deptos"),
             Horizontal(*botones, id="botones"),
             classes="paso",
@@ -550,9 +666,11 @@ class IdeamTUI(App):
 
     # ---------- paso 3: rango de años ----------
     def _anios(self) -> Vertical:
+        descargar = Button("Descargar ⬇", id="descargar", variant="success", disabled=True)
+        descargar.tooltip = "Inicia la descarga con los filtros elegidos."
         return Vertical(
-            Static("Paso 3 · Rango de años", classes="titulo"),
-            Shimmer("⏳ Detectando años disponibles…", id="rango-info"),
+            LoadingIndicator(id="rango-load"),
+            Static("", id="rango-info", classes="pista"),
             Horizontal(
                 Vertical(Label("Año inicio:"), Input(placeholder="…", id="f-ini")),
                 Vertical(Label("Año fin:"), Input(placeholder="…", id="f-fin")),
@@ -565,8 +683,7 @@ class IdeamTUI(App):
             Static(AVISO_DHIME, id="aviso-dhime", classes="pista"),
             Horizontal(
                 self._con_tip(Button("← Atrás", id="atras"), "Vuelve a departamentos."),
-                self._con_tip(Button("Descargar ⬇", id="descargar", variant="primary"),
-                              "Inicia la descarga con los filtros elegidos."),
+                descargar,
                 id="botones",
             ),
             classes="paso",
@@ -600,7 +717,7 @@ class IdeamTUI(App):
         self.call_from_thread(self._fijar_rango, gmin, gmax, cob)
 
     def _fijar_rango(self, gmin: int, gmax: int, cob: dict | None = None) -> None:
-        linea = f"[{GRIS}]Histórico del dataset: [b]{gmin}–{gmax}[/b][/]"
+        linea = f"[$text-muted]Histórico del dataset: [b]{gmin}–{gmax}[/b][/]"
         cob = cob or {}
         partes = []
         if cob.get("estaciones") is not None:
@@ -614,8 +731,10 @@ class IdeamTUI(App):
             gmin = max(gmin, int(cob["ini"][:4]))
             gmax = min(gmax, int(cob["fin"][:4]))
         if partes:
-            linea += f"\n[{AMARILLO}]Tu filtro:[/] [{GRIS}]" + " · ".join(partes) + "[/]"
-        self.query_one("#rango-info", Shimmer).detener(linea)
+            linea += f"\n[$accent]Tu filtro:[/] [$text-muted]" + " · ".join(partes) + "[/]"
+        # ya no estamos cargando: oculta el spinner y muestra la info
+        self.query_one("#rango-load", LoadingIndicator).display = False
+        self.query_one("#rango-info", Static).update(linea)
         self.query_one("#f-ini", Input).value = str(gmin)
         self.query_one("#f-fin", Input).value = str(gmax)
         # Si el inicio REAL del filtro es ≥2010, casi seguro es una estación
@@ -630,6 +749,27 @@ class IdeamTUI(App):
                 "automática se instaló entonces. Los registros convencionales "
                 "anteriores están solo en el portal DHIME del IDEAM."
             )
+
+    # --- validación en vivo del rango de años ---
+    @on(Input.Changed, "#f-ini")
+    @on(Input.Changed, "#f-fin")
+    def _revalidar_anios(self, _ev: Input.Changed | None = None) -> None:
+        try:
+            ini_w = self.query_one("#f-ini", Input)
+            fin_w = self.query_one("#f-fin", Input)
+            btn = self.query_one("#descargar", Button)
+        except Exception:  # noqa: BLE001
+            return  # aún no montado
+        ok = True
+        try:
+            ini = int(ini_w.value.strip())
+            fin = int(fin_w.value.strip())
+            ok = 1900 <= ini <= fin <= 2100
+        except ValueError:
+            ok = False
+        ini_w.set_class(not ok, "error")
+        fin_w.set_class(not ok, "error")
+        btn.disabled = not ok
 
     @on(Button.Pressed, "#descargar")
     def _iniciar(self) -> None:
@@ -649,11 +789,11 @@ class IdeamTUI(App):
 
     # ---------- paso 4: descarga ----------
     def _descarga(self) -> Vertical:
-        emoji = emoji_de(self.sel_dataset["nombre"])
         return Vertical(
-            Static(f"{emoji}  {self.sel_dataset['nombre']}", classes="titulo"),
-            Shimmer(f"⏳ Descargando {self.sel_dataset['nombre']}…", id="shimmer-dl"),
-            ProgressBar(total=100, show_eta=True, id="barra"),
+            ProgressBar(
+                total=100, show_eta=True, id="barra",
+                gradient=Gradient.from_colors(ROJO, "#C9A227", AMARILLO),
+            ),
             Static("Iniciando…", id="estado"),
             classes="paso",
         )
@@ -706,10 +846,10 @@ class IdeamTUI(App):
                   rate: float = 0.0, eta: float = 0.0) -> None:
         self.query_one("#barra", ProgressBar).update(progress=pct)
         bloques = f"bloque [b]{hechos}/{total}[/b]" if total else ""
-        vel = f"[{GRIS}]·[/] [{AMARILLO}]{rate:,.0f} filas/s[/]" if rate else ""
-        falta = f"[{GRIS}]· ~{self._fmt_dur(eta)} restante[/]" if eta else ""
+        vel = f"[$text-muted]·[/] [$accent]{rate:,.0f} filas/s[/]" if rate else ""
+        falta = f"[$text-muted]· ~{self._fmt_dur(eta)} restante[/]" if eta else ""
         self.query_one("#estado", Static).update(
-            f"[{AMARILLO}]{filas:,}[/] filas  [{GRIS}]{bloques}[/]  {vel} {falta}".strip())
+            f"[$accent]{filas:,}[/] filas  [$text-muted]{bloques}[/]  {vel} {falta}".strip())
 
     @staticmethod
     def _fmt_dur(seg: float) -> str:
@@ -722,29 +862,36 @@ class IdeamTUI(App):
 
     def _ok(self, r: dict) -> None:
         self.query_one("#barra", ProgressBar).update(progress=100)
-        self.query_one("#shimmer-dl", Shimmer).detener("")
         if r["rows"] == 0:
-            msg = (f"[{AMARILLO}]Sin datos.[/] La consulta fue válida pero el IDEAM no tiene "
+            msg = ("[$warning]Sin datos.[/] La consulta fue válida pero el IDEAM no tiene "
                    "registros de esa variable para ese departamento/periodo.")
+            self.notify("Consulta válida, pero sin registros para ese filtro.",
+                        title="Sin datos", severity="warning")
         else:
             msg = (
-                f"[{AMARILLO} bold]✓ ¡DESCARGA COMPLETA![/]\n\n"
-                f"[{GRIS}]Filas únicas:[/] [b]{r['rows']:,}[/b]"
-                + (f"   ([{GRIS}]{r['duplicates']:,} duplicados depurados[/])" if r.get("duplicates") else "")
-                + f"\n[{GRIS}]Archivos:[/] {r['files_parquet']} parquet · {r['files_csv']} csv\n"
-                f"[{GRIS}]Carpeta:[/] [b]{Path(r['output_dir']).resolve()}[/b]\n"
-                + (f"[{GRIS}]Resumen de cobertura:[/] {Path(r['report']).name}\n" if r.get("report") else "")
-                + f"[{GRIS}]Tiempo:[/] {r['seconds']}s"
+                f"[$success bold]✓ ¡DESCARGA COMPLETA![/]\n\n"
+                f"[$text-muted]Filas únicas:[/] [b]{r['rows']:,}[/b]"
+                + (f"   ([$text-muted]{r['duplicates']:,} duplicados depurados[/])" if r.get("duplicates") else "")
+                + f"\n[$text-muted]Archivos:[/] {r['files_parquet']} parquet · {r['files_csv']} csv\n"
+                f"[$text-muted]Carpeta:[/] [b]{Path(r['output_dir']).resolve()}[/b]\n"
+                + (f"[$text-muted]Resumen de cobertura:[/] {Path(r['report']).name}\n" if r.get("report") else "")
+                + f"[$text-muted]Tiempo:[/] {r['seconds']}s"
             )
+            self.notify(f"Descarga completa: {r['rows']:,} filas", title="¡Listo!",
+                        severity="information")
         self._ultimo_output = r.get("output_dir")
-        self.query_one("#estado", Static).update(
-            msg + f"\n\n[{GRIS}]Pulsa [b]O[/b] abrir carpeta · [b]N[/b] otra consulta · "
+        estado = self.query_one("#estado", Static)
+        estado.update(
+            msg + f"\n\n[$text-muted]Pulsa [b]O[/b] abrir carpeta · [b]N[/b] otra consulta · "
             f"[b]Q[/b] salir · [b]Ctrl+P[/b] comandos[/]")
+        # revelado suave del bloque de resultados (momento de recompensa)
+        estado.styles.opacity = 0.0
+        estado.styles.animate("opacity", value=1.0, duration=0.4)
 
     def _err(self, msg: str) -> None:
-        self.query_one("#shimmer-dl", Shimmer).detener("")
         self.query_one("#estado", Static).update(
-            f"[{ROJO}]{msg}[/]\n\nPulsa N para reintentar o Q para salir.")
+            f"[$error]{msg}[/]\n\nPulsa N para reintentar o Q para salir.")
+        self.notify(msg, title="Error en la descarga", severity="error")
 
 
 def run() -> None:
