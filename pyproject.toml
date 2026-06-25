@@ -32,14 +32,18 @@ dependencies = [
   "pydantic>=2.0",
   "textual>=0.80",
   "python-dotenv>=1.0",
+  # La CLI lo usa de verdad en batch.py (comandos `datasets`/`download`), no
+  # solo el modo servidor: debe ser dependencia core, no llegar de gancho
+  # transitivo por sodapy.
+  "requests>=2.31",
 ]
 
 [project.optional-dependencies]
 # Componentes de servidor (espejo PostgreSQL/TimescaleDB e ingesta).
 # El usuario local de la CLI NO los necesita: `pip install .` basta.
+# (requests ya es dependencia core; aquí solo el driver de PostgreSQL.)
 server = [
   "psycopg[binary]>=3.1",
-  "requests>=2.31",
 ]
 
 [project.urls]

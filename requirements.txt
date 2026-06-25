@@ -7,3 +7,4 @@ pyarrow>=14.0
 pydantic>=2.0
 textual>=0.80
 python-dotenv>=1.0
+requests>=2.31

@@ -1,4 +1,6 @@
+import os
 import re
+import tempfile
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -6,6 +8,28 @@ from pathlib import Path
 import pandas as pd
 
 from .config import EXCEL_MAX_ROWS
+
+
+def _atomic_write(path, write_fn):
+    """Escribe de forma ATÓMICA: ``write_fn`` recibe la ruta de un archivo
+    temporal en la MISMA carpeta del destino; al terminar se hace ``os.replace``
+    (renombrado atómico en el mismo sistema de archivos). Si la escritura se
+    interrumpe (Ctrl+C, falta de memoria, caída del proceso), queda solo el
+    temporal —que se limpia— y NUNCA un archivo a medias en ``path`` que parezca
+    válido. Es el entregable de datos: un archivo silenciosamente truncado es
+    peor que uno ausente.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        write_fn(tmp_path)
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def safe_path_part(value, fallback="SIN_DATO"):
@@ -32,9 +56,13 @@ def split_csv_by_excel_limit(df, output_base_path, max_rows=EXCEL_MAX_ROWS):
         output_path = output_base_path.with_name(f"{output_base_path.stem}{suffix}{output_base_path.suffix}")
         # date_format sin la 'T': Excel lo reconoce como fecha y permite
         # filtrar/ordenar cronologicamente (no como texto).
-        df.iloc[start:start + max_data_rows].to_csv(
-            output_path, index=False, encoding="utf-8-sig",
-            date_format="%Y-%m-%d %H:%M:%S",
+        chunk = df.iloc[start:start + max_data_rows]
+        _atomic_write(
+            output_path,
+            lambda p, chunk=chunk: chunk.to_csv(
+                p, index=False, encoding="utf-8-sig",
+                date_format="%Y-%m-%d %H:%M:%S",
+            ),
         )
         output_paths.append(output_path)
 
@@ -100,7 +128,8 @@ def write_coverage_report(df, variable_name, base_dir, date_column=None,
             "la data histórica de estaciones convencionales no está en datos.gov.co (vive en DHIME).",
         ]
 
-    report_path.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+    contenido = "\n".join(lineas) + "\n"
+    _atomic_write(report_path, lambda p: p.write_text(contenido, encoding="utf-8"))
     return str(report_path)
 
 
@@ -142,7 +171,7 @@ def export_by_department_municipality(
 
         filename_base = f"{variable_part}_{department_part.lower()}_{municipality_part.lower()}_{stamp}"
         parquet_path = folder / f"{filename_base}.parquet"
-        group_df.to_parquet(parquet_path, index=False)
+        _atomic_write(parquet_path, lambda p, g=group_df: g.to_parquet(p, index=False))
 
         csv_paths = []
         if include_csv:

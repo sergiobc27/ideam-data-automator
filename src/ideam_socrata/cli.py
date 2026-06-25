@@ -31,13 +31,22 @@ def _verify_atlantico(args: argparse.Namespace) -> int:
     bounded_where = " AND ".join(
         [where, *date_window_clauses(args.date_column, args.start_date, args.end_date)]
     )
-    sample_rows = CLIENT.get(
-        args.dataset_id,
-        select=f"departamento, municipio, codigoestacion, {args.date_column}",
-        where=bounded_where,
-        order=args.date_column,
-        limit=args.limit,
+    # Igual que el resto del comando (catalog_coverage usa intentar): la muestra
+    # pasa por reintentos/backoff. Ante un 429/timeout/dataset-id malo devuelve
+    # None en vez de un traceback crudo justo en el comando de "verificación".
+    sample_rows = intentar(
+        lambda: CLIENT.get(
+            args.dataset_id,
+            select=f"departamento, municipio, codigoestacion, {args.date_column}",
+            where=bounded_where,
+            order=args.date_column,
+            limit=args.limit,
+        ),
+        "muestra verify",
     )
+    # None = la muestra falló tras agotar reintentos (intentar devuelve None);
+    # [] = el dataset/depto no tiene filas (verificación válida, no un fallo).
+    sample_ok = sample_rows is not None
     catalog_coverage = verify_department_coverage(
         CLIENT,
         args.catalog_dataset_id,
@@ -51,6 +60,7 @@ def _verify_atlantico(args: argparse.Namespace) -> int:
                 "dataset_id": args.dataset_id,
                 "department": args.department,
                 "variants": variants,
+                "ok": sample_ok,
                 "sample_rows": sample_rows,
                 "catalog_coverage": catalog_coverage,
             },
@@ -58,7 +68,10 @@ def _verify_atlantico(args: argparse.Namespace) -> int:
             indent=2,
         )
     )
-    return 0
+    # Un comando de "verificación" no debe reportar éxito (exit 0) si no pudo
+    # obtener la muestra: así un script/CI con `verify && ...` no toma un fallo
+    # de red como verificación superada.
+    return 0 if sample_ok else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,8 +137,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     try:
         return _dispatch(argv)
-    except KeyboardInterrupt:
-        # Ctrl+C en medio de una descarga: salir limpio, sin traceback crudo.
+    except (KeyboardInterrupt, EOFError):
+        # Ctrl+C (cancelar) o Ctrl+D / stdin agotado (cerrar el asistente):
+        # salir limpio, sin traceback crudo.
         print("\nCancelado por el usuario.")
         return 130
 
