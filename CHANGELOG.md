@@ -14,6 +14,44 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
 > hidrometeorológicas, superación de los límites de la API Socrata y evolución
 > hacia una plataforma web de monitoreo y análisis hídrico.
 
+## [1.2.0] - 2026-06-25
+
+*Rediseño visual de la TUI y pulido de robustez de la herramienta de terminal,
+derivados de una auditoría multiagente del paquete instalable. Compatible hacia
+atrás: no cambian los comandos ni los formatos de salida.*
+
+### Herramienta de terminal (CLI + TUI)
+
+#### Agregado
+- **Rediseño moderno de la TUI** (`ideam-socrata tui`): tema propio de la
+  Universidad de la Costa sobre fondo oscuro, cajas con relieve y el título de
+  cada paso integrado en el borde, barra de progreso de pasos (Variable,
+  Departamentos, Años, Descarga), barra de descarga con degradado y tiempo
+  estimado, indicadores de carga nativos, botones que reaccionan al foco y al
+  ratón, validación en vivo del rango de años y avisos (toast) al terminar.
+- **`verify` informa el resultado de forma fiable**: nuevo campo `ok` en la
+  salida JSON y código de salida distinto de cero cuando la muestra no se pudo
+  obtener (antes podía reportar éxito ante un fallo de red).
+
+#### Corregido
+- **Exportación a prueba de cortes (escritura atómica)**: los archivos Parquet,
+  CSV y el resumen se escriben en un temporal y se renombran al final. Si la
+  descarga se interrumpe (Ctrl+C, falta de memoria, caída del proceso) ya no
+  queda un archivo a medias que aparente estar completo.
+- **Salida limpia ante Ctrl+D / fin de entrada**: el asistente interactivo ya no
+  muestra un error técnico al cerrarse con Ctrl+D o con la entrada agotada.
+- **`verify` resiliente**: la consulta de muestra reintenta ante fallos
+  transitorios de red en lugar de abortar con un error crudo.
+
+#### Empaquetado
+- `requests` pasa a ser dependencia principal (lo usan los comandos `datasets` y
+  `download`); antes solo llegaba de forma indirecta a través de `sodapy`.
+- Se requiere `textual >= 2.0` para las nuevas capacidades visuales de la TUI.
+
+#### Calidad
+- 27 pruebas nuevas (entrypoint de la CLI, escrituras atómicas, validación de
+  cargas y empaquetado). El paquete pasa de 79 a 106 pruebas.
+
 ## [1.1.0] - 2026-06-19
 
 *Endurecimiento de correctitud y robustez tras dos rondas de auditoría. La CLI y
