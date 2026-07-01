@@ -11,12 +11,18 @@
 #
 # Subida opcional a Oracle Object Storage (Always Free: 20 GB): configurar OCI
 # CLI una vez (`oci setup config`) y definir OCI_BUCKET en /etc/ideam/ideam.env.
+# Alerta de offsite: definir HC_BACKUP_URL (check "ideam-backup" en
+# healthchecks.io) en /etc/ideam/ideam.env; ver el bloque de subida abajo.
 set -euo pipefail
 
 DESTINO="/var/backups/ideam"
 FECHA="$(date -u +%Y%m%d)"
 ARCHIVO="$DESTINO/ideam_backup_$FECHA.sql.gz"
-CONTENEDOR="ideam-pg"
+# Nombre del contenedor Postgres: una sola fuente de verdad, la variable
+# PG_CONTAINER de /etc/ideam/ideam.env (linea: PG_CONTAINER=ideam-pg). El
+# default coincide con el contenedor real del box (`docker ps`) y con el
+# `docker run --name ideam-pg` del procedimiento E de docs/RUNBOOK.md.
+CONTENEDOR="${PG_CONTAINER:-ideam-pg}"
 
 # Tamaño mínimo plausible del dump de esquema (un esquema real pesa mucho más;
 # por debajo de esto algo falló y no debemos publicar/rotar).
@@ -78,12 +84,34 @@ find "$DESTINO" -name 'ideam_backup_*.sql.gz' -mtime +14 -delete
 # OCI_NAMESPACE en el entorno; el usuario limitado no puede auto-descubrir el
 # namespace, asi que hay que pasarlo explicito. Sin esas vars, usa el perfil
 # DEFAULT y auto-descubre el namespace (comportamiento anterior).
+#
+# Alerta accionable (auditoria 2026-07-01): un fallo u omision de la copia
+# offsite dejaba solo un renglon en syslog; backup y DB compartian destino sin
+# que nadie se enterara. Ahora se pingea healthchecks.io (mismo patron ping_hc
+# de ideam-healthcheck.sh) via HC_BACKUP_URL en /etc/ideam/ideam.env:
+#   exito  -> HC_BACKUP_URL        (check al dia)
+#   fallo  -> HC_BACKUP_URL/fail   (alerta por email, con mensaje corto)
+# Sin HC_BACKUP_URL definida solo queda el logger (comportamiento anterior).
+# El backup LOCAL ya quedo verificado y rotado llegados aqui: un fallo del
+# offsite NUNCA invalida el backup local ni el exit 0 del script.
+ping_backup_hc() {  # $1=sufijo ('' exito, '/fail' fallo)  $2=mensaje corto
+  [ -n "${HC_BACKUP_URL:-}" ] && curl -fsS -m 10 --retry 2 -o /dev/null \
+    --data-raw "${2:-}" "${HC_BACKUP_URL}$1" || true
+}
+
 if [ -n "${OCI_BUCKET:-}" ] && command -v oci >/dev/null 2>&1; then
   if oci os object put ${OCI_PROFILE:+--profile "$OCI_PROFILE"} ${OCI_NAMESPACE:+--namespace "$OCI_NAMESPACE"} \
        --bucket-name "$OCI_BUCKET" --file "$ARCHIVO" \
        --name "backups/$(basename "$ARCHIVO")" --force >/dev/null 2>&1; then
     logger -t ideam-backup "subido a Object Storage: $OCI_BUCKET"
+    ping_backup_hc "" "backup $FECHA OK: local + offsite ($OCI_BUCKET)"
   else
     logger -t ideam-backup "ADVERTENCIA: fallo la subida a Object Storage (el backup local existe)"
+    ping_backup_hc "/fail" "fallo subida offsite a $OCI_BUCKET; backup local OK: $ARCHIVO"
   fi
+else
+  # Antes este caso se omitia en SILENCIO y el backup quedaba solo en el mismo
+  # disco que la DB (perder la caja = perder ambos). Dejar rastro y alertar.
+  logger -t ideam-backup "ADVERTENCIA: sin copia offsite (OCI_BUCKET no configurado u oci CLI ausente)"
+  ping_backup_hc "/fail" "sin copia offsite (OCI_BUCKET u oci CLI ausentes); backup local OK: $ARCHIVO"
 fi

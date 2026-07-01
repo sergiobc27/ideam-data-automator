@@ -9,7 +9,13 @@ Convenciones del box:
 - Codigo de la app: `/opt/ideam/app`  ·  API: `/opt/ideam/api`
 - venv: `/opt/ideam/venv`  ·  secretos: `/etc/ideam/ideam.env` (600)
 - Descargas crudas: `/opt/ideam/raw/` (chunks `.part`) · bulk: `/opt/ideam/bulk/`
-- Postgres corre en Docker (contenedor `timescaledb`); `$DATABASE_URL` en el env.
+- Postgres corre en Docker (contenedor `ideam-pg`, imagen
+  `timescale/timescaledb:latest-pg15`); `$DATABASE_URL` en el env.
+- El nombre del contenedor tiene UNA sola fuente de verdad: la variable
+  `PG_CONTAINER` en `/etc/ideam/ideam.env` (linea `PG_CONTAINER=ideam-pg`).
+  Los scripts de deploy la leen con default `ideam-pg`; si el contenedor se
+  crea con otro nombre, backup, healthcheck y refresh de IDF dejan de
+  encontrarlo. Verificar el nombre real: `docker ps --format '{{.Names}}'`.
 - `psql` rapido:
   ```bash
   set -a; source /etc/ideam/ideam.env; set +a
@@ -90,8 +96,8 @@ Causas frecuentes:
   `SOCRATA_APP_TOKENS` tenga tokens validos en el env.
 - **Postgres no responde:** ver que el contenedor este arriba
   ```bash
-  docker ps --filter name=timescaledb
-  docker logs --tail 50 timescaledb
+  docker ps --filter name=ideam-pg
+  docker logs --tail 50 ideam-pg
   ```
 - **Estado degradado:** forzar refresco de agregados continuos si las vistas
   quedaron atrasadas:
@@ -216,16 +222,34 @@ Socrata**; el unico costo es el tiempo de descarga del historico.
 
 ### 1. Base de datos (Docker TimescaleDB)
 
+El `--name ideam-pg` NO es opcional: es el nombre que esperan los scripts
+(`PG_CONTAINER` en `/etc/ideam/ideam.env`, default `ideam-pg`). Con otro
+nombre, el backup diario aborta (`docker exec` a contenedor inexistente), el
+healthcheck marca el delta como caido y el refresh de IDF no corre.
+
+Techo de memoria (auditoria 2026-07-01): el box de 24 GB se comparte con la
+API (MemoryHigh=3G/MemoryMax=4G en `ideam-api.service`) y los jobs pesados
+(slice `ideam-heavy`, 4G). `--memory 8g` mas `shared_buffers`/`work_mem`
+conservadores evitan que un pico repita el OOM del 2026-06-13, en el que el
+OOM-killer mato al proceso mas grande (Postgres):
+
 ```bash
 mkdir -p /opt/ideam/pgdata
-docker run -d --name timescaledb --restart unless-stopped \
+docker run -d --name ideam-pg --restart unless-stopped \
+    --memory 8g \
     -p 127.0.0.1:5432:5432 \
     -e POSTGRES_PASSWORD='<password>' \
     -e POSTGRES_DB=ideam \
     -v /opt/ideam/pgdata:/var/lib/postgresql/data \
-    timescale/timescaledb:latest-pg15
-docker ps --filter name=timescaledb
+    timescale/timescaledb:latest-pg15 \
+    -c shared_buffers=2GB -c effective_cache_size=6GB -c work_mem=32MB
+docker ps --filter name=ideam-pg
 ```
+
+Racional del tuning: `shared_buffers=2GB` (25% del limite del contenedor, la
+regla conservadora clasica de Postgres), `effective_cache_size=6GB` (pista al
+planner, no reserva RAM) y `work_mem=32MB` acotado porque se multiplica por
+operacion de sort/hash y por conexion (la API abre varias a la vez).
 
 ### 2. Codigo, venv y secretos
 
@@ -234,7 +258,10 @@ git clone https://github.com/sergiobc27/ideam-data-automator.git /opt/ideam/app
 python3 -m venv /opt/ideam/venv
 /opt/ideam/venv/bin/pip install -e "/opt/ideam/app[server]"
 
-# Recrear el env (DATABASE_URL, SOCRATA_APP_TOKENS, HEALTHCHECK_URL, etc.)
+# Recrear el env: DATABASE_URL, SOCRATA_APP_TOKENS, HEALTHCHECK_URL,
+# PG_CONTAINER=ideam-pg (nombre del contenedor que leen los scripts),
+# HC_API_URL/HC_DELTA_URL/HC_DISK_URL/HC_BACKUP_URL (healthchecks.io) y
+# OCI_BUCKET/OCI_PROFILE/OCI_NAMESPACE (copia offsite del backup).
 install -m 600 /dev/null /etc/ideam/ideam.env
 $EDITOR /etc/ideam/ideam.env
 set -a; source /etc/ideam/ideam.env; set +a
