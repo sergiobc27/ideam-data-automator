@@ -127,6 +127,24 @@ src/ideam_socrata/
 tests/                 # Pruebas unitarias
 ```
 
+## Arquitectura del proyecto
+
+La plataforma completa se reparte en **dos repositorios** complementarios:
+
+- **Este repo (`ideam-data-automator`)**: el paquete Python instalable (CLI y
+  TUI de descarga), el espejo PostgreSQL + TimescaleDB del histórico del IDEAM
+  y la API FastAPI (`api/`) que lo sirve, desplegados en un servidor de Oracle
+  Cloud. La operación del servidor está documentada en
+  [docs/SERVIDOR.md](docs/SERVIDOR.md) y los procedimientos de guardia y
+  recuperación en [docs/RUNBOOK.md](docs/RUNBOOK.md).
+- **[`sergiobc27/website`](https://github.com/sergiobc27/website)**: el
+  frontend web (React/Vite) y el Cloudflare Worker que hace de proxy hacia la
+  API, publicados en [ideam.sergiobc.com](https://ideam.sergiobc.com).
+
+La herramienta local de este repo funciona por sí sola contra Socrata (no
+necesita el servidor); el espejo, la API y la web son la capa de consulta y
+análisis construida encima.
+
 ## Pruebas
 
 ```powershell
