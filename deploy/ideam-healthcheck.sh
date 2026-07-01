@@ -9,9 +9,16 @@
 #        HC_API_URL=https://hc-ping.com/xxxx
 #        HC_DELTA_URL=https://hc-ping.com/yyyy
 #        HC_DISK_URL=https://hc-ping.com/zzzz
+#   4. (opcional) un 4to check "ideam-backup" (period 1d, grace 6h) para la
+#      copia offsite del backup: HC_BACKUP_URL=... (lo pingea ideam-backup.sh).
 # Sin URLs configuradas el script solo registra en syslog (no falla).
 # healthchecks.io alerta por email cuando un check deja de recibir pings.
 set -u
+
+# Contenedor Postgres: una sola fuente de verdad, PG_CONTAINER en
+# /etc/ideam/ideam.env (default ideam-pg, el nombre real en el box y el del
+# `docker run --name ideam-pg` del procedimiento E de docs/RUNBOOK.md).
+PG_CONTAINER="${PG_CONTAINER:-ideam-pg}"
 
 ping_hc() {  # $1=url $2=sufijo ('' exito, '/fail' fallo)
   [ -n "$1" ] && curl -fsS -m 10 --retry 2 -o /dev/null "$1$2" || true
@@ -43,7 +50,7 @@ else
 fi
 
 # 3) El delta corrio en las ultimas 26 horas?
-DELTA_OK=$(docker exec ideam-pg psql -U ideam -d ideam -tAc \
+DELTA_OK=$(docker exec "$PG_CONTAINER" psql -U ideam -d ideam -tAc \
   "SELECT count(*) FROM ingest_state WHERE grain='delta' AND status='done' \
    AND updated_at > now() - interval '26 hours'" 2>/dev/null | tr -dc '0-9')
 if [ "${DELTA_OK:-0}" -gt 0 ]; then
