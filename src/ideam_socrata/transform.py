@@ -111,5 +111,17 @@ def deduplicate_observations(df, date_column):
     dedup_cols = ["codigoestacion", date_column]
     if "codigosensor" in df.columns:
         dedup_cols.insert(1, "codigosensor")
+    # Orden estable por una llave TOTAL antes del keep="last": sin sort previo,
+    # ante dos versiones del mismo (estacion[, sensor], fecha) con distinto
+    # valorobservado en un mismo chunk, keep="last" toma la ultima del stream de
+    # Socrata (arbitraria, no la mas reciente). Ordenando por la identidad + el
+    # valor, keep="last" conserva de forma DETERMINISTA el valor mayor de la
+    # colision. Socrata no expone marca de recencia para preferir la correccion
+    # mas nueva (ver auditoria datos-correctitud #7); el upsert DO UPDATE sigue
+    # convergiendo al ultimo lote publicado entre chunks.
+    sort_cols = list(dedup_cols)
+    if "valorobservado" in df.columns:
+        sort_cols.append("valorobservado")
+    df = df.sort_values(by=sort_cols, kind="stable", na_position="first")
     df = df.drop_duplicates(subset=dedup_cols, keep="last")
     return df, before - len(df)

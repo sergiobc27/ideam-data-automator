@@ -9,8 +9,17 @@ espejo tal cual, sin modificacion). La unica desviacion es ESTRUCTURAL: filas si
 floating_id/codigo/fecha violan NOT NULL y no son observaciones validas, asi que
 van a observaciones_rechazos (sin ellas la fila no puede materializarse). La QC
 fisica de lecturas imposibles vive ahora en la CAPA DE CALCULO (vistas/agregados +
-topes de la API), no en la ingesta; la logica de rangos sigue en
-ideam_socrata.physical_ranges para ese uso.
+topes de la API), no en la ingesta.
+
+FUENTE UNICA de los rangos/topes fisicos: ideam_socrata.physical_ranges. Alli
+viven tanto los rangos por-lectura (reject_reason/split_frame, para tests y usos
+futuros de saneo) como los techos de cordura de la capa de calculo
+(MAX_PRECIP_DIARIA_MM / MAX_PRECIP_MENSUAL_MM), que la API importa en vez de
+repetir numeros magicos (auditoria datos-correctitud #5). El precomputo IDF
+(deploy/idf_schema.sql) usa umbrales mas estrictos a proposito (dato de 10 min y
+ventana movil) que, por ser SQL, no pueden importar esas constantes; su
+equivalencia queda documentada en ese archivo. Recordatorio: nada de esto filtra
+en la INGESTA: este loader escribe el espejo tal cual.
 """
 
 import logging

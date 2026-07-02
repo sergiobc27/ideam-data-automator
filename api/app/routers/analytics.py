@@ -345,19 +345,38 @@ def monthly_climatology(payload: QueryPayload):
 # --- Hidrología: períodos de retorno, SPI, histograma -------------------------
 
 _PRECIP_DATASET = "s54a-sgyg"
-# Techo físico para precipitación diaria: el récord mundial en 24 h es ~1825 mm
-# (Foc-Foc, Reunión, 1966). Un valor por encima es casi seguro un sentinel/error
-# de la fuente IDEAM; lo avisamos (NO lo borramos) porque contamina los ajustes.
-_MAX_PRECIP_DIARIA_MM = 1800.0
-# Techo físico para la LÁMINA MENSUAL (acumulado por estación-mes). El mes más
-# lluvioso jamás registrado en Colombia (Chocó/Lloró) ronda ~2.000 mm; 2.500 mm
-# deja margen y aun así excluye SOLO ~0,7% de los meses-estación del espejo, que
-# son corrupción residual (sensores de muestreo sub-10-min cuya suma se infla,
-# y centinelas): sin este techo, 180 meses imposibles (hasta 302.267 mm en una
-# sola estación) envenenan la media (Valle del Cauca superaba a Chocó). Es un
-# saneo NO destructivo en lectura; la limpieza de origen va en el saneo de
-# ingesta (Fix #2). Auditoría de datos 2026-06-15.
-_MAX_PRECIP_MENSUAL_MM = 2500.0
+# Techos de cordura de precipitación para la CAPA DE CÁLCULO (analítica). FUENTE
+# ÚNICA: ideam_socrata.physical_ranges, para que ningún endpoint reintroduzca un
+# número mágico desincronizado (auditoría datos-correctitud #5). Repliegue a
+# literales idénticos si el paquete del ingestor NO está instalado junto a la API
+# (deploy independiente): así el arranque nunca falla; test_precip_ceiling
+# comprueba que coincidan cuando conviven.
+#   - DIARIA 1800 mm: el récord mundial en 24 h es ~1825 mm (Foc-Foc, Reunión,
+#     1966); por encima es casi seguro sentinel/error del IDEAM. Se AVISA (NO se
+#     borra) porque contamina los ajustes.
+#   - MENSUAL 2500 mm: el mes más lluvioso en Colombia (Chocó/Lloró) ronda ~2.000
+#     mm; 2.500 deja margen y excluye SOLO ~0,7% de los meses-estación del espejo
+#     (corrupción residual que infla la media). Saneo NO destructivo en lectura;
+#     la ingesta es espejo puro y no filtra. Auditoría de datos 2026-06-15.
+try:
+    from ideam_socrata.physical_ranges import (
+        MAX_PRECIP_DIARIA_MM as _MAX_PRECIP_DIARIA_MM,
+        MAX_PRECIP_MENSUAL_MM as _MAX_PRECIP_MENSUAL_MM,
+    )
+except Exception:  # pragma: no cover - repliegue si el ingestor no está instalado
+    _MAX_PRECIP_DIARIA_MM = 1800.0
+    _MAX_PRECIP_MENSUAL_MM = 2500.0
+
+# Piso de COMPLETITUD INTRA-DÍA para que un día pueda fijar el máximo anual
+# (auditoría datos-correctitud #3). obs_diario suma lecturas de 10 min; un día
+# completo del dataset automático (s54a-sgyg) tiene ~144 lecturas. Sin piso, un
+# día con 1 sola lectura válida entraba como candidato al máximo con un acumulado
+# PARCIAL (subestima el evento). Exigimos >=130/144 (~90%) de lecturas válidas:
+# es el análogo intra-día del gate ANUAL de completitud que idf_schema.sql aplica
+# por año (p_min_obs), llevado al día. Constante nombrada para no dispersar el
+# número por el código.
+_LECTURAS_DIA_ESPERADAS = 144          # 24 h a 10 min (cadencia de s54a-sgyg)
+_MIN_LECTURAS_DIA_MAX = 130            # ~90% del día: umbral para candidato a máximo
 
 
 def _precip_ceiling_clause(metric, table):
@@ -456,11 +475,16 @@ def build_return_periods_payload(valid_years, n_boot=400):
         "empirical": empirical,
         "goodnessOfFit": gof,
         "recommended": rec_name,
+        # Campo NUEVO (aditivo): honestidad sobre CÓMO se elige la recomendada.
+        # No es un AIC formal por MLE, sino un cuasi-AIC sobre L-momentos; ante
+        # empate se desempata por KS/AD (auditoría hidrología #5).
+        "selectionCriterion": hydrostats.SELECTION_CRITERION,
         "distributions": fit["distributions"],
         "method": ("Ajuste de Gumbel, GEV y Log-Pearson III sobre máximos anuales; "
-                   "recomendación por AIC; bondad por Anderson-Darling y KS-Lilliefors "
-                   "(bootstrap). La recomendación es un valor por defecto: el usuario "
-                   "puede elegir cualquier distribución."),
+                   "recomendación por cuasi-AIC (L-momentos), con desempate por "
+                   "bondad de ajuste (Anderson-Darling y KS-Lilliefors, bootstrap) "
+                   "cuando la diferencia de AIC es menor a 2. La recomendación es un "
+                   "valor por defecto: el usuario puede elegir cualquier distribución."),
         "stationarityTests": strep,
         "reliability": reliability.reliability_report(valid_years, strep),
     }
@@ -485,18 +509,33 @@ def return_periods(payload: QueryPayload):
 
     where, params, _dataset = _cagg_filters(payload)
     with pool.connection() as conn:
+        # Sensor: obs_diario ya colapsa a UN sensor por día DESPRIORIZANDO el GPRS
+        # '0257' (schema.sql:191). Coherente con el precómputo IDF, que tras el
+        # Fix #2 aplica el MISMO criterio en el CTE `dom` de deploy/idf_schema.sql
+        # (coalesce(codigosensor='0257',false) ASC como primer desempate). Así el
+        # Tr de precip máx diaria y el punto de 1440 min de la IDF salen del mismo
+        # sensor por año (auditoría datos-correctitud #2). Nota: obs_diario agrega
+        # por día CALENDARIO y la IDF usa ventana móvil de 24 h, así que aun con el
+        # mismo sensor los dos valores no tienen por qué coincidir al milímetro.
+        #
         # Saneo de cordura (no destructivo): el máximo anual IGNORA los días con
         # precipitación físicamente imposible (>techo); así un día corrupto no
         # envenena el ajuste, pero se conserva el año (recupera el mayor día
-        # válido restante). Se cuentan los días excluidos para avisar.
+        # válido restante). Se cuentan los días excluidos para avisar. Además exige
+        # COMPLETITUD intra-día (>= _MIN_LECTURAS_DIA_MAX lecturas) para que un día
+        # pueda FIJAR el máximo: un día mal muestreado da un acumulado parcial que
+        # subestima el evento (#3). dias_validos (para el gate anual de 300 días)
+        # sigue contando días con CUALQUIER dato, no la completitud intra-día.
         rows = conn.execute(
             "SELECT extract(year FROM (dia AT TIME ZONE 'UTC'))::int AS anio, "
-            "max(valor_sum) FILTER (WHERE n_validos > 0 AND valor_sum >= 0 "
-            "AND valor_sum <= %(max_precip)s) AS maximo, "
+            "max(valor_sum) FILTER (WHERE n_validos >= %(min_lecturas_dia)s "
+            "AND valor_sum >= 0 AND valor_sum <= %(max_precip)s) AS maximo, "
             "count(*) FILTER (WHERE n_validos > 0) AS dias_validos, "
-            "count(*) FILTER (WHERE n_validos > 0 AND valor_sum > %(max_precip)s) AS dias_imposibles "
+            "count(*) FILTER (WHERE n_validos >= %(min_lecturas_dia)s "
+            "AND valor_sum > %(max_precip)s) AS dias_imposibles "
             f"FROM obs_diario WHERE {where} GROUP BY 1 ORDER BY 1",
-            {**params, "max_precip": _MAX_PRECIP_DIARIA_MM},
+            {**params, "max_precip": _MAX_PRECIP_DIARIA_MM,
+             "min_lecturas_dia": _MIN_LECTURAS_DIA_MAX},
         ).fetchall()
 
     valid_years = [
@@ -511,7 +550,13 @@ def return_periods(payload: QueryPayload):
 
     warnings = []
     if discarded:
-        warnings.append(f"{discarded} año(s) descartado(s) por tener menos de {_DIAS_MIN_ANIO_VALIDO} días de datos.")
+        # Un año cae aquí por <300 días con dato O porque ningún día suyo alcanzó
+        # la completitud intra-día mínima para ser candidato a máximo (#3).
+        warnings.append(
+            f"{discarded} año(s) descartado(s) por datos insuficientes (menos de "
+            f"{_DIAS_MIN_ANIO_VALIDO} días con dato, o sin días con al menos "
+            f"{_MIN_LECTURAS_DIA_MAX} lecturas para fijar el máximo)."
+        )
     if n < 15:
         warnings.append("Registro corto (<15 años válidos): estimación de BAJA confianza.")
     elif n < 30:
@@ -529,6 +574,12 @@ def return_periods(payload: QueryPayload):
         warnings.append(aviso)
     payload_out["datasetId"] = payload.datasetId
     payload_out["warnings"] = warnings
+    # Documenta el umbral de completitud intra-día en el método devuelto (#3).
+    payload_out["method"] = (
+        f"{payload_out['method']} Máximo diario anual: solo días con al menos "
+        f"{_MIN_LECTURAS_DIA_MAX} de ~{_LECTURAS_DIA_ESPERADAS} lecturas de 10 min "
+        "son candidatos (completitud intra-día ~90%)."
+    )
     return payload_out
 
 
@@ -587,12 +638,19 @@ def _solve_3x3(a, c):
     return [m[i][3] / m[i][i] for i in range(3)]
 
 
-def build_idf_curves(by_duration, durations, return_periods, n_boot=400):
+def build_idf_curves(by_duration, durations, return_periods, n_boot=400,
+                     goodness=False, gof_n_boot=200):
     """Construye las curvas IDF eligiendo por AIC la distribución de CADA
     duración. Si la mezcla rompe la monotonicidad (intensidad no decreciente
     con la duración para algún Tr), repliega a una sola distribución global
     (mejor AIC total) y avisa. Devuelve curvas, distribución por duración y
-    warnings de método. No incluye bootstrap (costo)."""
+    warnings de método. No incluye bootstrap para las CURVAS (costo).
+
+    goodness: si es True, calcula además la bondad de ajuste KS SOLO de la
+    distribución elegida en cada duración (bootstrap barato, gof_n_boot
+    remuestreos) y la devuelve en 'goodnessByDuration', añadiendo un warning por
+    duración cuyo ajuste no pase KS (auditoría hidrología #6). /idf lo enciende
+    (costo medido ~+0,05 s); default False para no encarecer otros usos/tests."""
     # 1) Ajustar UNA vez por duración; cachear las candidatas por nombre y la
     # recomendada (menor AIC). aic_by_name acumula el AIC para el repliegue.
     fits, chosen, aic_by_name = {}, {}, {}
@@ -671,8 +729,42 @@ def build_idf_curves(by_duration, durations, return_periods, n_boot=400):
                 "(tendencia o cambio de régimen); las curvas IDF asumen estacionariedad "
                 "— interpreta con cautela.")
 
+    # Bondad de ajuste por duración (opt-in). Solo la distribución ELEGIDA en cada
+    # duración, con bootstrap reducido: propaga a la IDF la verificación KS que la
+    # metodología promete, sin el costo de evaluarla para las tres candidatas.
+    gof_by_duration = {}
+    if goodness:
+        for dur in durations:
+            name = chosen.get(dur)
+            serie = by_duration.get(dur)
+            if not name or not serie or len(serie) < 5:
+                continue
+            fit_fn = hydrostats.FIT_FUNCTIONS.get(name)
+            if fit_fn is None:
+                continue
+            fitted = fit_fn(serie)
+            if fitted is None:
+                continue
+            boot = hydrostats._bootstrap(name, fitted["params"], serie, fit_fn,
+                                         n_boot=gof_n_boot, want_goodness=True,
+                                         want_bands=False)
+            ks = boot.get("ks")
+            if not ks:
+                continue
+            gof_by_duration[dur] = {
+                "test": "Kolmogorov-Smirnov (Lilliefors, bootstrap)",
+                "distribution": name, "statistic": ks["statistic"],
+                "critical": ks["critical"], "pValue": ks["pValue"],
+                "alpha": ks["alpha"], "passes": ks["passes"],
+            }
+            if not ks["passes"]:
+                warnings.append(
+                    f"Duración {dur} min: el ajuste {name} no pasa la prueba KS "
+                    f"(p = {ks['pValue']}); usa esa parte de la curva con cautela.")
+
     return {"curves": curves, "fitSamples": samples, "chosenByDuration": chosen,
-            "warnings": warnings, "stationaritySummary": summary}
+            "warnings": warnings, "stationaritySummary": summary,
+            "goodnessByDuration": gof_by_duration}
 
 
 @router.post("/idf")
@@ -686,6 +778,12 @@ def idf(payload: QueryPayload):
     convierte a intensidad (mm/h = lámina / (D/60)). Ajusta además la ecuación
     I = K·T^m/D^n (Vargas & Díaz-Granados). Si la estación no está
     precomputada, lo indica.
+
+    Bondad de ajuste (auditoría hidrología #6): incluye 'goodnessByDuration' con
+    la prueba KS (Lilliefors, bootstrap reducido n=200) SOLO de la distribución
+    elegida en cada duración, y un warning por duración cuyo ajuste no pase.
+    Costo medido en sintético (9 duraciones x 30 años): +0,05 s sobre 0,45 s de
+    base, por eso va siempre encendida. Campos existentes intactos (aditivo).
     """
     from ..normalize import expand_station_codes
 
@@ -743,7 +841,8 @@ def idf(payload: QueryPayload):
     if aviso_excl_idf:
         warnings.append(aviso_excl_idf)
 
-    built = build_idf_curves(by_duration, durations, _IDF_RETURN_PERIODS)
+    built = build_idf_curves(by_duration, durations, _IDF_RETURN_PERIODS,
+                             goodness=True)
     curves = built["curves"]
     fit_samples = built["fitSamples"]
     warnings.extend(built["warnings"])
@@ -771,13 +870,17 @@ def idf(payload: QueryPayload):
         "curves": curves,
         "chosenByDuration": built["chosenByDuration"],
         "stationaritySummary": built["stationaritySummary"],
+        # Aditivo: KS de la distribución elegida en cada duración (#6).
+        "goodnessByDuration": built["goodnessByDuration"],
+        # Aditivo: honestidad sobre el criterio de selección (cuasi-AIC, #5).
+        "selectionCriterion": hydrostats.SELECTION_CRITERION,
         "equation": _fit_idf_equation(fit_samples),
         "warnings": warnings,
         "method": (
             "Máximos anuales móviles por duración (datos 10-min); por cada duración se "
-            "elige Gumbel/GEV/Log-Pearson III por AIC (con repliegue a una sola "
-            "distribución si las curvas no resultan monótonas); ecuación I=K·T^m/D^n por "
-            "mínimos cuadrados log-lineal"
+            "elige Gumbel/GEV/Log-Pearson III por cuasi-AIC sobre L-momentos (con "
+            "repliegue a una sola distribución si las curvas no resultan monótonas); "
+            "ecuación I=K·T^m/D^n por mínimos cuadrados log-lineal"
         ),
     }
 

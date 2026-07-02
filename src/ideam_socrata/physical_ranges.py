@@ -65,6 +65,27 @@ _SIMPLE_RANGES = {
     "kiw7-v9ta": (0.0, 360.0),     # dirección del viento °
 }
 
+# --- Techos de cordura de la CAPA DE CÁLCULO (analítica / endpoints) -----------
+# NO son de la INGESTA: `observaciones` es espejo puro y la ingesta jamás filtra
+# (ver db/copy_loader.py). Estos topes existen para que la ANALÍTICA no muestre
+# picos físicamente imposibles y se centralizan aquí como FUENTE ÚNICA, de modo
+# que ningún endpoint de precipitación reintroduzca un número mágico
+# desincronizado (auditoría datos-correctitud #5). El precómputo IDF
+# (deploy/idf_schema.sql) usa umbrales a propósito más estrictos (dato de 10 min
+# y ventana móvil) que viven en SQL y no pueden importar Python; su equivalencia
+# se documenta en ese archivo.
+#   MAX_PRECIP_LECTURA_MM  = tope por LECTURA cruda (rango físico simple de arriba).
+#   MAX_PRECIP_DIARIA_MM   = tope por DÍA: récord mundial 24 h ~1825 mm
+#                            (Foc-Foc, Reunión, 1966); por encima es casi seguro
+#                            sentinel/error del IDEAM. Se AVISA, no se borra.
+#   MAX_PRECIP_MENSUAL_MM  = tope por MES-estación: el mes más lluvioso de
+#                            Colombia (Chocó/Lloró) ronda ~2.000 mm; 2.500 deja
+#                            margen y excluye solo ~0,7% de los meses-estación del
+#                            espejo (corrupción residual). Auditoría 2026-06-15.
+MAX_PRECIP_LECTURA_MM = _SIMPLE_RANGES[PRECIP_ID][1]
+MAX_PRECIP_DIARIA_MM = 1800.0
+MAX_PRECIP_MENSUAL_MM = 2500.0
+
 
 def expected_pressure_hpa(altitud_m):
     """Presión esperada por la atmósfera estándar internacional a una altitud (m)."""

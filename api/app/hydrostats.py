@@ -391,6 +391,49 @@ def _bootstrap(name, params, data, fit_fn, return_periods=(), n_boot=1000,
 
 RETURN_PERIODS = (2, 5, 10, 25, 50, 100)
 _FITTERS = (("Gumbel", fit_gumbel, 2), ("GEV", fit_gev, 3), ("LogPearsonIII", fit_lp3, 3))
+# Función de ajuste por nombre de distribución (para recomputar bondad de una
+# distribución concreta, p.ej. la elegida por duración en IDF).
+FIT_FUNCTIONS = {name: fn for name, fn, _k in _FITTERS}
+
+# Umbral de "empate" de AIC (Burnham & Anderson, 2002): modelos dentro de 2
+# unidades de AIC tienen SOPORTE EQUIVALENTE. Aquí es doblemente pertinente porque
+# el AIC de aic() es un CUASI-AIC (verosimilitud en estimadores L-momento/de-
+# momentos, no MLE), luego su diferencia fina no es concluyente.
+_AIC_TIE_DELTA = 2.0
+# Texto de honestidad para exponer en la API: el criterio de selección NO es un
+# AIC formal por MLE.
+SELECTION_CRITERION = (
+    "cuasi-AIC sobre ajustes por L-momentos (Gumbel/GEV) y momentos-log (LP3); "
+    "es un criterio relativo, no un AIC por máxima verosimilitud. Ante empate "
+    "(diferencia de AIC < 2) se desempata por bondad de ajuste (KS/Anderson-Darling)."
+)
+
+
+def _recommend_with_gof_tiebreak(dists):
+    """Distribución recomendada: la de MENOR AIC, con DESEMPATE por bondad de
+    ajuste cuando el AIC no distingue (ΔAIC < 2). Regla estándar (Burnham &
+    Anderson, 2002): entre modelos con soporte equivalente por AIC se prefiere el
+    de mejor ajuste empírico (mayor p-valor KS; A^2 de Anderson-Darling menor como
+    segundo criterio), usando la bondad ya calculada por bootstrap. Sin bloque de
+    bondad (goodness=False, p.ej. IDF) se mantiene el AIC puro. `dists` debe venir
+    ordenada por AIC ascendente."""
+    best_aic = dists[0]["aic"]
+    empatadas = [d for d in dists if d["aic"] <= best_aic + _AIC_TIE_DELTA]
+    con_gof = [d for d in empatadas if (d.get("goodnessOfFit") or {}).get("ks")]
+    if len(con_gof) < 2:
+        return dists[0]["name"]  # sin empate real o sin bondad calculada -> AIC puro
+
+    def _clave(d):
+        gof = d.get("goodnessOfFit") or {}
+        ks = gof.get("ks") or {}
+        ad = gof.get("andersonDarling") or {}
+        p = ks.get("pValue")
+        a2 = ad.get("statistic")
+        # mayor p-valor KS = mejor; A^2 menor desempata.
+        return (p if p is not None else -1.0,
+                -(a2 if a2 is not None else float("inf")))
+
+    return max(con_gof, key=_clave)["name"]
 
 
 def fit_all(maxima, return_periods=RETURN_PERIODS, goodness=True, bands=False, n_boot=1000,
@@ -443,4 +486,7 @@ def fit_all(maxima, return_periods=RETURN_PERIODS, goodness=True, bands=False, n
         return {"recommended": None, "distributions": []}
     candidates.sort(key=lambda c: c[0])
     dists = [c[1] for c in candidates]
-    return {"recommended": dists[0]["name"], "distributions": dists}
+    # `distributions` queda ordenada por AIC ascendente (contrato existente); la
+    # recomendada es la de menor AIC salvo empate (ΔAIC<2), donde desempata la
+    # bondad de ajuste ya calculada (auditoría hidrología #5).
+    return {"recommended": _recommend_with_gof_tiebreak(dists), "distributions": dists}

@@ -122,5 +122,22 @@ class SplitFrameTests(unittest.TestCase):
         self.assertEqual(len(bad), 0)
 
 
+class TechosCapaCalculoTests(unittest.TestCase):
+    """Fuente única de los techos de la capa de cálculo (auditoría #5)."""
+
+    def test_constantes_definidas_y_sanas(self):
+        # Existen como fuente única para que la API no repita números mágicos.
+        self.assertEqual(pr.MAX_PRECIP_DIARIA_MM, 1800.0)
+        self.assertEqual(pr.MAX_PRECIP_MENSUAL_MM, 2500.0)
+        # El tope por lectura sale del rango físico simple de precipitación.
+        self.assertEqual(pr.MAX_PRECIP_LECTURA_MM, pr._SIMPLE_RANGES[pr.PRECIP_ID][1])
+
+    def test_orden_de_los_techos(self):
+        # lectura < diaria < mensual: un extremo por lectura no puede pasar el
+        # techo diario, y el diario no puede pasar el mensual.
+        self.assertLess(pr.MAX_PRECIP_LECTURA_MM, pr.MAX_PRECIP_DIARIA_MM)
+        self.assertLess(pr.MAX_PRECIP_DIARIA_MM, pr.MAX_PRECIP_MENSUAL_MM)
+
+
 if __name__ == "__main__":
     unittest.main()

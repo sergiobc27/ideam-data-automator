@@ -375,3 +375,85 @@ def test_fit_all_sin_bands_no_agrega_lower_upper():
     rec = hs.fit_all(data, goodness=True, bands=False, n_boot=100)["distributions"][0]
     assert rec["goodnessOfFit"]["ks"] is not None
     assert all("lower" not in q for q in rec["quantiles"])
+
+
+# --- Desempate por bondad de ajuste cuando el AIC empata (auditoría hidro #5) --
+
+def _cand(name, aic, ks_p=None, ad_stat=None):
+    d = {"name": name, "aic": aic}
+    if ks_p is not None or ad_stat is not None:
+        d["goodnessOfFit"] = {
+            "ks": {"pValue": ks_p, "passes": True} if ks_p is not None else None,
+            "andersonDarling": {"statistic": ad_stat} if ad_stat is not None else None,
+        }
+    return d
+
+
+def test_tiebreak_sin_empate_gana_el_menor_aic():
+    # Diferencia de AIC >= 2: manda el AIC aunque la otra tenga mejor KS.
+    dists = [_cand("Gumbel", 100.0, ks_p=0.1), _cand("GEV", 103.0, ks_p=0.9)]
+    assert hs._recommend_with_gof_tiebreak(dists) == "Gumbel"
+
+
+def test_tiebreak_con_empate_gana_mejor_ks():
+    # AIC dentro de 2 unidades: desempata el mayor p-valor KS.
+    dists = [_cand("Gumbel", 100.0, ks_p=0.10), _cand("GEV", 101.5, ks_p=0.80)]
+    assert hs._recommend_with_gof_tiebreak(dists) == "GEV"
+
+
+def test_tiebreak_sin_bondad_mantiene_aic_puro():
+    # goodness=False (p.ej. IDF): sin bloque de bondad, AIC puro.
+    dists = [_cand("Gumbel", 100.0), _cand("GEV", 100.5)]
+    assert hs._recommend_with_gof_tiebreak(dists) == "Gumbel"
+
+
+def test_tiebreak_empate_de_ks_desempata_por_ad():
+    # Mismo p-valor KS: gana el A^2 de Anderson-Darling MENOR.
+    dists = [_cand("Gumbel", 100.0, ks_p=0.5, ad_stat=0.9),
+             _cand("GEV", 101.0, ks_p=0.5, ad_stat=0.3)]
+    assert hs._recommend_with_gof_tiebreak(dists) == "GEV"
+
+
+def test_fit_all_recommended_sigue_en_distributions():
+    # La recomendada (con o sin desempate) siempre es una candidata real.
+    data = [12, 18, 25, 31, 40, 22, 28, 55, 33, 47, 19, 61]
+    out = hs.fit_all(data, goodness=True, n_boot=150)
+    assert out["recommended"] in {d["name"] for d in out["distributions"]}
+    # y las distribuciones siguen ordenadas por AIC ascendente (contrato).
+    aics = [d["aic"] for d in out["distributions"]]
+    assert aics == sorted(aics)
+
+
+def test_selection_criterion_expuesto():
+    # Nota de honestidad: cuasi-AIC sobre L-momentos, con desempate KS/AD.
+    assert "cuasi-AIC" in hs.SELECTION_CRITERION
+    assert "L-momentos" in hs.SELECTION_CRITERION
+    vy = [{"year": 2000 + i, "maximum": v, "days": 365}
+          for i, v in enumerate([45, 60, 52, 71, 48, 90, 55, 63, 58, 77])]
+    out = analytics.build_return_periods_payload(vy, n_boot=120)
+    assert out["selectionCriterion"] == hs.SELECTION_CRITERION
+
+
+# --- Bondad de ajuste por duración en IDF (auditoría hidro #6) -----------------
+
+def test_build_idf_goodness_apagado_por_defecto():
+    durations = [10, 30]
+    by_duration = {d: [10.0 * d / 10 + i for i in range(12)] for d in durations}
+    res = analytics.build_idf_curves(by_duration, durations, (2, 5, 10))
+    assert res["goodnessByDuration"] == {}
+
+
+def test_build_idf_goodness_ks_por_duracion():
+    durations = [10, 30, 60]
+    base = {10: 12, 30: 22, 60: 33}
+    by_duration = {d: [base[d] * (0.8 + 0.02 * i) for i in range(25)] for d in durations}
+    res = analytics.build_idf_curves(by_duration, durations, (2, 5, 10),
+                                     goodness=True, gof_n_boot=120)
+    assert set(res["goodnessByDuration"]) == set(durations)
+    for dur, gof in res["goodnessByDuration"].items():
+        assert gof["distribution"] == res["chosenByDuration"][dur]
+        assert {"statistic", "critical", "pValue", "alpha", "passes"} <= set(gof)
+    # Si alguna duración no pasa KS, debe haber un warning que la nombre.
+    for dur, gof in res["goodnessByDuration"].items():
+        if not gof["passes"]:
+            assert any(f"{dur} min" in w and "KS" in w for w in res["warnings"])
