@@ -177,7 +177,7 @@ BEGIN
                 (720,  d720,  r720,  c720),
                 (1440, d1440, r1440, c1440)
             ) AS d(dur_min, depth, real_slots, win_slots)
-            ORDER BY anio, dur_min, depth DESC, real_slots DESC, slot
+            ORDER BY anio, dur_min, depth DESC NULLS LAST, real_slots DESC, slot
         ),
         -- Gates ANUALES (idénticos a antes): completitud, lámina anual y máx 24h.
         anual AS (
