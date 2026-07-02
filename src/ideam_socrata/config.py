@@ -94,7 +94,30 @@ def get_socrata_client(write=False):
         )
     return Socrata(DOMAIN, APP_TOKEN, timeout=TIMEOUT)
 
-CLIENT = get_socrata_client()
+
+class _LazySocrataClient:
+    """Proxy perezoso: construye el cliente Socrata real (lectura) solo en el
+    primer uso, no al importar el módulo. Todos los llamadores existentes
+    hacen `from .config import CLIENT` y usan `CLIENT.get(...)` o lo pasan
+    como argumento; este proxy se comporta como el cliente real vía
+    `__getattr__` sin que ningún call-site tenga que cambiar. Los tests que
+    hacen `mock.patch.object(cli.CLIENT, "get", ...)` siguen funcionando: el
+    patch se aplica sobre la instancia real una vez construida.
+    """
+
+    def __init__(self):
+        self._client = None
+
+    def _ensure(self):
+        if self._client is None:
+            self._client = get_socrata_client()
+        return self._client
+
+    def __getattr__(self, name):
+        return getattr(self._ensure(), name)
+
+
+CLIENT = _LazySocrataClient()
 
 DATASETS_INFO = [
     {"nombre": "Precipitación", "id": "s54a-sgyg", "fecha_col": "fechaobservacion", "tipo": "estandar"},
