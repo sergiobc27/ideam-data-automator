@@ -1,10 +1,12 @@
+import threading
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from ..catalog import CATALOG_FILTERS, DATASETS, DEPARTMENT_MAP
-from ..db import pool
+from ..db import pool, read_with_retry
 from ..http_utils import client_ip as _client_ip
 from ..normalize import department_variants, get_dataset, validate_required_departments
 from ..ratelimit import check_rate_limit
@@ -39,16 +41,47 @@ def health():
     return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}
 
 
-@router.get("/api/ready")
-def ready():
-    """Salud profunda: prueba la DB con timeout corto. El modo de fallo más
-    probable (pool agotado por exports o Postgres caído) pasaba invisible
-    porque /api/health responde 200 sin tocar la base (hallazgo de auditoría)."""
+# /api/ready es publico (el healthcheck del box lo llama SIN el secreto del
+# proxy, exigirselo romperia la sonda) y toca la DB. Para que una rafaga
+# anonima no consuma conexiones del pool, el resultado del SELECT 1 se cachea
+# unos segundos por proceso: a lo sumo ~1 sondeo a la DB cada
+# _READY_CACHE_SECONDS por worker, sin cambiar el contrato del endpoint
+# (auditoria 2026-07-01). El costo es ver el cambio de estado de la DB con
+# hasta esos segundos de retraso, irrelevante para un monitor de 30-60s.
+_READY_CACHE_SECONDS = 5.0
+_READY_STATE = {"ok": None, "at": 0.0}  # ok None = aun sin sondeo
+_READY_LOCK = threading.Lock()
+
+
+def _ready_db_ok():
     try:
         with pool.connection(timeout=5) as conn:
             conn.execute("SET LOCAL statement_timeout = '5s'")
             conn.execute("SELECT 1").fetchone()
+        return True
     except Exception:
+        return False
+
+
+@router.get("/api/ready")
+def ready():
+    """Salud profunda: prueba la DB con timeout corto (cacheado unos segundos,
+    ver _READY_STATE). El modo de fallo más probable (pool agotado por exports
+    o Postgres caído) pasaba invisible porque /api/health responde 200 sin
+    tocar la base (hallazgo de auditoría)."""
+    state = _READY_STATE
+    if state["ok"] is None or time.monotonic() - state["at"] >= _READY_CACHE_SECONDS:
+        # Single-flight: un solo hilo sondea la DB a la vez. Si otro ya esta
+        # sondeando y existe un resultado previo, se sirve ese (stale de unos
+        # segundos); solo se bloquea cuando aun no hay NINGUN resultado.
+        if _READY_LOCK.acquire(blocking=state["ok"] is None):
+            try:
+                if state["ok"] is None or time.monotonic() - state["at"] >= _READY_CACHE_SECONDS:
+                    state["ok"] = _ready_db_ok()
+                    state["at"] = time.monotonic()
+            finally:
+                _READY_LOCK.release()
+    if not state["ok"]:
         return JSONResponse(
             {"ok": False, "error": "database"},
             status_code=503,
@@ -64,12 +97,15 @@ def _data_freshness():
     # Frescura del espejo desde ingest_state (high-water mark del delta):
     # instantáneo, sin tocar la hypertable. Es informativo: si la DB no
     # responde, /api/meta sigue funcionando con valores nulos.
-    try:
+    def _consulta():
         with pool.connection() as conn:
-            row = conn.execute(
+            return conn.execute(
                 "SELECT max(hwm_fecha), max(updated_at) FROM ingest_state "
                 "WHERE grain = 'delta' AND status = 'done'"
             ).fetchone()
+
+    try:
+        row = read_with_retry(_consulta)
         return {
             "latestObservation": row[0].isoformat() if row and row[0] else None,
             "lastSync": row[1].isoformat() if row and row[1] else None,
@@ -112,11 +148,14 @@ def date_range(datasetId: str, request: Request):
     # hypertable cruda, los datasets que terminaron en el pasado (los de mar,
     # hasta 2020) obligaban a un ChunkAppend hacia atrás desde 2026 saltando
     # ~6 años de chunks vacíos -> timeout de 30s. obs_diario ya tiene el rango.
-    with pool.connection() as conn:
-        row = conn.execute(
-            "SELECT min(dia), max(dia) FROM obs_diario WHERE source_dataset_id = %s",
-            (dataset["id"],),
-        ).fetchone()
+    def _consulta():
+        with pool.connection() as conn:
+            return conn.execute(
+                "SELECT min(dia), max(dia) FROM obs_diario WHERE source_dataset_id = %s",
+                (dataset["id"],),
+            ).fetchone()
+
+    row = read_with_retry(_consulta)
     start, end = row
     # obs_diario está alineado a UTC; en la sesión (America/Bogota) .date()
     # directo regresaría el día anterior en los bordes del rango.
@@ -143,17 +182,21 @@ def stations_geojson(request: Request):
     colombiano (San Andrés incluido: lon hasta -82, lat hasta 14).
     """
     _lectura_rate(request)
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT codigoestacion, nombre, categoria, tecnologia, estado, "
-            "departamento_norm, municipio, latitud, longitud, altitud, "
-            "zona_hidrografica, corriente, entidad "
-            "FROM estaciones "
-            "WHERE latitud BETWEEN -5 AND 14 AND longitud BETWEEN -82 AND -66 "
-            # Cota de seguridad anti-OOM (ver _STATIONS_GEOJSON_CAP): no recorta
-            # el catálogo actual (~18K), evita materializar sin límite (auditoría #2).
-            f"LIMIT {_STATIONS_GEOJSON_CAP}"
-        ).fetchall()
+
+    def _consulta():
+        with pool.connection() as conn:
+            return conn.execute(
+                "SELECT codigoestacion, nombre, categoria, tecnologia, estado, "
+                "departamento_norm, municipio, latitud, longitud, altitud, "
+                "zona_hidrografica, corriente, entidad "
+                "FROM estaciones "
+                "WHERE latitud BETWEEN -5 AND 14 AND longitud BETWEEN -82 AND -66 "
+                # Cota de seguridad anti-OOM (ver _STATIONS_GEOJSON_CAP): no recorta
+                # el catálogo actual (~18K), evita materializar sin límite (auditoría #2).
+                f"LIMIT {_STATIONS_GEOJSON_CAP}"
+            ).fetchall()
+
+    rows = read_with_retry(_consulta)
     features = [
         {
             "type": "Feature",
@@ -190,10 +233,13 @@ def municipalities(request: Request, department: list[str] = Query(default=[])):
     variants = set()
     for canonical in canonicals:
         variants.update(department_variants(canonical))
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT municipio FROM mv_catalogo "
-            "WHERE upper(departamento) = ANY(%s) AND municipio IS NOT NULL ORDER BY municipio",
-            (sorted(variants),),
-        ).fetchall()
+    def _consulta():
+        with pool.connection() as conn:
+            return conn.execute(
+                "SELECT DISTINCT municipio FROM mv_catalogo "
+                "WHERE upper(departamento) = ANY(%s) AND municipio IS NOT NULL ORDER BY municipio",
+                (sorted(variants),),
+            ).fetchall()
+
+    rows = read_with_retry(_consulta)
     return _cached_json({"municipalities": [r[0] for r in rows]}, ttl_seconds=3600)

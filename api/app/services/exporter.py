@@ -28,7 +28,7 @@ from psycopg.rows import tuple_row
 from psycopg.types.json import Jsonb
 
 from ..caggs import cagg_filters, can_use_cagg
-from ..db import pool
+from ..db import export_pool, pool
 from ..models import QueryPayload
 from ..normalize import (
     build_filters,
@@ -234,6 +234,14 @@ _STALE_SQL = (
     "   OR (status = 'queued' AND updated_at < now() - interval '30 minutes')"
 )
 
+# Poda de jobs terminados (auditoria 2026-07-01): export_jobs crecia una fila
+# por exportacion PARA SIEMPRE (el timer de limpieza solo borra los .zip del
+# disco). Simetrico a la poda de api_rate_limit (db._PRUNE_SQL). Solo estados
+# terminales: los activos tienen finished_at NULL y no matchean. El ZIP asociado
+# ya expiro hace dias (export_ttl_seconds = 1h) y el front solo consulta jobs
+# recientes.
+_PURGE_SQL = "DELETE FROM export_jobs WHERE finished_at < now() - interval '7 days'"
+
 
 def reconcile_on_startup():
     """Reencola los jobs 'queued' de un proceso anterior, bajo advisory lock para
@@ -287,6 +295,7 @@ def _reconcile_loop():
                     continue
                 try:
                     conn.execute(_STALE_SQL)
+                    conn.execute(_PURGE_SQL)
                 finally:
                     conn.execute("SELECT pg_advisory_unlock(%s)", (_RECONCILE_LOCK_KEY,))
         except Exception:  # noqa: BLE001
@@ -354,13 +363,16 @@ def _run_job(job_id):
     # GROUP BY sobre la cruda = minutos de "Planificando" en selecciones
     # grandes. El conteo sale del cagg y los grupos de mv_catalogo.
     cat_where, cat_params = _catalog_where(payload)
-    with pool.connection() as conn:
-        if can_use_cagg(payload):
-            cwhere, cparams, _d = cagg_filters(payload)
+    if can_use_cagg(payload):
+        cwhere, cparams, _d = cagg_filters(payload)
+        with pool.connection() as conn:
             row_count = int(conn.execute(
                 f"SELECT coalesce(sum(n), 0) FROM obs_diario WHERE {cwhere}", cparams
             ).fetchone()[0])
-        else:
+    else:
+        # Conteo sobre la cruda (hasta 900s): conexion del pool de export para
+        # no retener una del pool web durante minutos.
+        with export_pool.connection() as conn:
             conn.execute("SET LOCAL statement_timeout = '900s'")
             row_count = conn.execute(
                 f"SELECT count(*) FROM observaciones WHERE {where}", params
@@ -435,7 +447,9 @@ def _run_job(job_id):
                     group_params = {**params, "g_dep": dep, "g_mun": mun}
                     name = f"{slug(dataset_name)}_{slug(dep)}_{slug(mun)}_{now.strftime('%H%M_%d%m%y')}"
                     rel = f"{slug(dataset_name)}/{slug(dep)}/{slug(mun)}/csv/{name}.csv"
-                    with pool.connection() as conn:
+                    # Conexion larga (COPY con 900s): pool de export, para no
+                    # acaparar el pool web de lecturas.
+                    with export_pool.connection() as conn:
                         conn.execute("SET LOCAL statement_timeout = '900s'")
                         # Los grupos salen del catálogo (sin fechas): saltar los
                         # que no tienen filas en el rango pedido.
@@ -483,7 +497,9 @@ def _run_job(job_id):
             else:
                 for dep, mun in groups:
                     writers = _GroupWriters(workdir, dataset_name, dep, mun, now, formats)
-                    with pool.connection() as conn:
+                    # Conexion larga (stream con 900s): pool de export, para no
+                    # acaparar el pool web de lecturas.
+                    with export_pool.connection() as conn:
                         conn.row_factory = tuple_row
                         # El ORDER BY del grupo puede tardar >30s en grupos
                         # grandes; tope holgado solo en esta transacción.
@@ -574,7 +590,7 @@ def _run_job(job_id):
                 f"AND municipio IS NOT DISTINCT FROM %(ag_mun_{i})s)"
             )
         agg_where = f"{where} AND ({' OR '.join(group_clauses)})"
-        with pool.connection() as conn:
+        with export_pool.connection() as conn:
             conn.execute("SET LOCAL statement_timeout = '900s'")
             agg = conn.execute(
                 "SELECT count(*), count(DISTINCT codigoestacion), "

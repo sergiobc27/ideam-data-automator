@@ -6,9 +6,13 @@ por (scope, ip) con una ventana deslizante simple: si la ventana expiró se
 reinicia el contador.
 
 IMPORTANTE: el estado vive en el proceso. Con 2 workers de uvicorn el límite
-es POR-WORKER (un cliente podría hacer hasta 2x el límite configurado). Es un
-candado anti-abuso "barato", aceptable para este despliegue; si en el futuro se
-necesita un límite global exacto, mover el contador a Redis o a Postgres.
+es POR-WORKER (un cliente podría hacer hasta 2x el límite configurado). Por eso
+el default de rate_limit_catalog_per_hour (settings.py) está calibrado a la
+MITAD del presupuesto por IP deseado (auditoría 2026-07-01). Es un candado
+anti-abuso "barato", aceptable para este despliegue; si en el futuro se
+necesita un límite global exacto, mover el contador a Redis o a Postgres
+(el scope 'export', el único con tope que importa de verdad, ya usa el
+limitador atómico en Postgres: db.check_rate_limit).
 
 No es seguro para escritura concurrente entre hilos a nivel de microsegundo,
 pero el peor caso es contar de menos un par de hits bajo carrera: irrelevante

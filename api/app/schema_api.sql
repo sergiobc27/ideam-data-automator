@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS export_jobs (
 
 CREATE INDEX IF NOT EXISTS ix_export_jobs_created ON export_jobs (created_at DESC);
 
+-- Indice parcial para las queries calientes que filtran por status (cap de
+-- jobs activos en POST /api/jobs, barrido de huerfanos y reencole del
+-- reconciler): sin el, cada chequeo hacia un seq scan de una tabla que crece
+-- una fila por export. Parcial: solo indexa los estados activos (minusculo).
+CREATE INDEX IF NOT EXISTS ix_export_jobs_status ON export_jobs (status)
+    WHERE status IN ('queued', 'planning', 'processing');
+
 -- Resumen del catálogo por dataset/region/estación: alimenta catalog-bundle,
 -- options, municipalities y coverage de forma instantánea.
 -- Se refresca tras el delta diario (ideam_socrata.db.delta) y al iniciar la API

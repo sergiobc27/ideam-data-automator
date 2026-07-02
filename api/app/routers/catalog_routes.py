@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 
 from ..catalog import CATALOG_FILTERS_BY_KEY
-from ..db import pool
+from ..db import pool, read_with_retry
 from ..http_utils import client_ip as _client_ip
 from ..ratelimit import check_rate_limit
 from ..models import CatalogBundlePayload, CatalogOptionsPayload, QueryPayload
@@ -68,14 +68,17 @@ def catalog_bundle(payload: CatalogBundlePayload, request: Request):
     for canonical in canonicals:
         variants.update(department_variants(canonical))
 
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT departamento, municipio, zonahidrografica, codigoestacion, nombreestacion, "
-            "       sum(total)::bigint AS total "
-            "FROM mv_catalogo WHERE source_dataset_id = %s AND upper(departamento) = ANY(%s) "
-            "GROUP BY 1,2,3,4,5 ORDER BY 1,2,4",
-            (dataset["id"], sorted(variants)),
-        ).fetchall()
+    def _consulta():
+        with pool.connection() as conn:
+            return conn.execute(
+                "SELECT departamento, municipio, zonahidrografica, codigoestacion, nombreestacion, "
+                "       sum(total)::bigint AS total "
+                "FROM mv_catalogo WHERE source_dataset_id = %s AND upper(departamento) = ANY(%s) "
+                "GROUP BY 1,2,3,4,5 ORDER BY 1,2,4",
+                (dataset["id"], sorted(variants)),
+            ).fetchall()
+
+    rows = read_with_retry(_consulta)
 
     return {
         "datasetId": dataset["id"],
@@ -104,12 +107,15 @@ def catalog_options(payload: CatalogOptionsPayload, request: Request):
     if label_column:
         select += f", max({label_column}) AS label"
 
-    with pool.connection() as conn:
-        rows = conn.execute(
-            f"SELECT {select}, sum(total)::bigint AS total FROM mv_catalogo "
-            f"WHERE {where} AND {column} IS NOT NULL GROUP BY {group} ORDER BY {group} LIMIT 5000",
-            params,
-        ).fetchall()
+    def _consulta():
+        with pool.connection() as conn:
+            return conn.execute(
+                f"SELECT {select}, sum(total)::bigint AS total FROM mv_catalogo "
+                f"WHERE {where} AND {column} IS NOT NULL GROUP BY {group} ORDER BY {group} LIMIT 5000",
+                params,
+            ).fetchall()
+
+    rows = read_with_retry(_consulta)
 
     options = []
     for row in rows:
@@ -130,14 +136,18 @@ def catalog_options(payload: CatalogOptionsPayload, request: Request):
 def stations_helper(payload: QueryPayload, request: Request):
     _catalog_rate(request)
     where, params, _dataset = _mv_filter(payload)
-    with pool.connection() as conn:
-        rows = conn.execute(
-            "SELECT codigoestacion, max(nombreestacion), max(departamento), max(municipio), "
-            "       max(zonahidrografica), sum(total)::bigint "
-            f"FROM mv_catalogo WHERE {where} GROUP BY codigoestacion "
-            "ORDER BY 2 NULLS LAST LIMIT 500",
-            params,
-        ).fetchall()
+
+    def _consulta():
+        with pool.connection() as conn:
+            return conn.execute(
+                "SELECT codigoestacion, max(nombreestacion), max(departamento), max(municipio), "
+                "       max(zonahidrografica), sum(total)::bigint "
+                f"FROM mv_catalogo WHERE {where} GROUP BY codigoestacion "
+                "ORDER BY 2 NULLS LAST LIMIT 500",
+                params,
+            ).fetchall()
+
+    rows = read_with_retry(_consulta)
     return {
         "stations": [
             {
@@ -160,32 +170,48 @@ def coverage(payload: QueryPayload, request: Request):
     dataset = get_dataset(payload.datasetId)
     canonicals = validate_required_departments(payload.departments)
 
+    # UNA sola query con la union de variantes en vez de un round-trip por
+    # departamento (N+1: hasta 40 idas y vueltas por el tunel, auditoria
+    # 2026-07-01); se reagrupa por canonico en Python. La forma de la respuesta
+    # JSON no cambia (el Worker la consume tal cual).
+    variants_by_canonical = {c: department_variants(c) for c in canonicals}
+    union = sorted({v for vs in variants_by_canonical.values() for v in vs})
+
+    def _consulta():
+        with pool.connection() as conn:
+            return conn.execute(
+                "SELECT departamento, sum(total)::bigint FROM mv_catalogo "
+                "WHERE source_dataset_id = %s AND upper(departamento) = ANY(%s) "
+                "GROUP BY 1 ORDER BY 1",
+                (dataset["id"], union),
+            ).fetchall()
+
+    rows = read_with_retry(_consulta)
+
     reports = []
     total_matched = 0
-    with pool.connection() as conn:
-        for canonical in canonicals:
-            variants = department_variants(canonical)
-            rows = conn.execute(
-                "SELECT departamento, sum(total)::bigint FROM mv_catalogo "
-                "WHERE source_dataset_id = %s AND upper(departamento) = ANY(%s) GROUP BY 1",
-                (dataset["id"], variants),
-            ).fetchall()
-            matched = [
-                {"departamento": r[0], "normalized": normalize_label(r[0]), "total": r[1]}
-                for r in rows
-            ]
-            matched_rows = sum(m["total"] for m in matched)
-            total_matched += matched_rows
-            reports.append(
-                {
-                    "department": canonical,
-                    "configured_variants": variants,
-                    "matched": matched,
-                    "matched_rows": matched_rows,
-                    "unmatched_rows": 0,
-                    "unmatched_discovered": [],
-                }
-            )
+    for canonical in canonicals:
+        variants = variants_by_canonical[canonical]
+        # Mismo criterio de pertenencia que tenia la query por-departamento
+        # (upper(departamento) = ANY(variants)), ahora evaluado en Python.
+        variant_set = set(variants)
+        matched = [
+            {"departamento": r[0], "normalized": normalize_label(r[0]), "total": r[1]}
+            for r in rows
+            if str(r[0]).upper() in variant_set
+        ]
+        matched_rows = sum(m["total"] for m in matched)
+        total_matched += matched_rows
+        reports.append(
+            {
+                "department": canonical,
+                "configured_variants": variants,
+                "matched": matched,
+                "matched_rows": matched_rows,
+                "unmatched_rows": 0,
+                "unmatched_discovered": [],
+            }
+        )
 
     return {
         "datasetId": dataset["id"],
@@ -200,13 +226,17 @@ def coverage(payload: QueryPayload, request: Request):
 
 @router.get("/api/catalog-status")
 def catalog_status():
-    with pool.connection() as conn:
-        populated = conn.execute(
-            "SELECT relispopulated FROM pg_class WHERE relname = 'mv_catalogo'"
-        ).fetchone()
-        stats = conn.execute(
-            "SELECT count(*), coalesce(sum(total),0) FROM mv_catalogo"
-        ).fetchone() if populated and populated[0] else (0, 0)
+    def _consulta():
+        with pool.connection() as conn:
+            populated = conn.execute(
+                "SELECT relispopulated FROM pg_class WHERE relname = 'mv_catalogo'"
+            ).fetchone()
+            stats = conn.execute(
+                "SELECT count(*), coalesce(sum(total),0) FROM mv_catalogo"
+            ).fetchone() if populated and populated[0] else (0, 0)
+            return populated, stats
+
+    populated, stats = read_with_retry(_consulta)
     return {
         "cacheVersion": "postgres-mv",
         "populated": bool(populated and populated[0]),
