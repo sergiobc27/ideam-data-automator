@@ -8,7 +8,11 @@
 set -u
 MODE="${1:-muestra}"
 SAMPLE_N="${2:-30}"
-PSQL="docker exec ideam-pg psql -U ideam -d ideam -tAc"
+# Contenedor Postgres: una sola fuente de verdad, PG_CONTAINER en
+# /etc/ideam/ideam.env (default ideam-pg, el nombre real en el box y el del
+# `docker run --name ideam-pg` del procedimiento E de docs/RUNBOOK.md).
+PG_CONTAINER="${PG_CONTAINER:-ideam-pg}"
+PSQL="docker exec $PG_CONTAINER psql -U ideam -d ideam -tAc"
 
 if [ "$MODE" = "muestra" ]; then
   # Top N estaciones de precipitación por volumen (desde mv_catalogo, instantáneo)
@@ -44,7 +48,7 @@ for code in $CODES; do
     continue
   fi
   t0=$(date +%s)
-  anios=$(docker exec ideam-pg psql -U ideam -d ideam -tAc "SELECT idf_compute_station('$code');" 2>&1)
+  anios=$(docker exec "$PG_CONTAINER" psql -U ideam -d ideam -tAc "SELECT idf_compute_station('$code');" 2>&1)
   echo "[$(date -u +%H:%M:%S)] ($i/$TOTAL) $code -> $anios años ($(($(date +%s)-t0))s)"
 done
 echo "[$(date -u +%H:%M:%S)] IDF backfill $MODE COMPLETO"

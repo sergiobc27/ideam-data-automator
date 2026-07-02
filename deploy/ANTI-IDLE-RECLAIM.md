@@ -29,10 +29,31 @@ de CPU puede caer bajo el umbral → riesgo real de que el espejo se apague solo
    - Verificación post-upgrade: la instancia muestra que ya no está sujeta a
      "idle instance reclamation" y el costo estimado del mes permanece en $0.
 
-## Decisión sugerida
+## Decisión pendiente (estado honesto a 2026-07-01)
 
-Hacer el upgrade PAYG cuando haya tarjeta disponible (elimina el riesgo de raíz
-y no cambia el costo). Mientras tanto, el healthcheck de 15 min avisará por
-email (healthchecks.io) si la API deja de responder — incluida la señal de un
-apagón por reclaim, para reaccionar a tiempo (la instancia detenida se puede
-reiniciar desde la consola sin perder el disco).
+El upgrade PAYG **no se ha ejecutado**. Es una acción exclusiva del dueño del
+proyecto: requiere entrar a la consola de Oracle con la cuenta propietaria y
+registrar una tarjeta de crédito. No se puede automatizar ni ejecutar desde
+este repositorio. Hasta entonces, el riesgo de reclaim por ociosidad sigue
+abierto y se acepta de forma explícita, con estas condiciones:
+
+- **Mitigación actual**: el healthcheck de 15 min avisa por email
+  (healthchecks.io) si la API deja de responder, incluida la señal de un
+  apagón por reclaim. El disco de bloque sobrevive a un stop de la instancia,
+  así que no hay pérdida de datos en ese escenario.
+- **RTO estimado con lo que hay hoy**:
+  - *Reclaim tipo stop* (el caso documentado por Oracle): detección por el
+    email de healthchecks.io más reinicio manual desde la consola. El reinicio
+    en sí toma minutos; el tiempo total lo domina cuánto tarde el dueño en ver
+    el correo. RTO realista: horas, mismo día. Sin pérdida de datos.
+  - *Pérdida total del box* (peor caso, no es el comportamiento del reclaim
+    pero se estima por honestidad): reconstrucción con el procedimiento E de
+    `docs/RUNBOOK.md`. El backup diario (esquema + `ingest_state` +
+    `estaciones`, con copia offsite en Object Storage) permite levantar la
+    estructura y reanudar el delta en horas, pero las observaciones históricas
+    se re-derivan desde Socrata: el backfill completo toma del orden de días.
+    RTO realista: 1 a 4 días para el histórico completo.
+- **Acción recomendada al dueño del proyecto**: hacer el upgrade PAYG con
+  Budget de alerta a $1 (sección anterior). Elimina el reclaim de raíz y el
+  costo sigue en $0 mientras solo se usen recursos Always Free. Es la
+  mitigación de mayor retorno y la única que cierra este riesgo.

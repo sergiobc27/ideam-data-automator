@@ -14,6 +14,16 @@ ExecStart=/opt/ideam/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
+# Techo de memoria (auditoria 2026-07-01): el box A1 (24 GB) se comparte con
+# Postgres/TimescaleDB (el proceso mas grande y el que mato el OOM-killer en el
+# incidente del 2026-06-13) y con los jobs pesados (slice ideam-heavy, 4G).
+# MemoryHigh frena a la API (reclaim/throttle del kernel) antes de comprometer
+# la RAM del resto; MemoryMax es el limite duro: si un export o pico de
+# peticiones concurrentes se desboca, el OOM cae DENTRO de este servicio (que
+# se reinicia solo via Restart=always) y no sobre Postgres. 2 workers uvicorn
+# operan normalmente muy por debajo de 3G.
+MemoryHigh=3G
+MemoryMax=4G
 
 [Install]
 WantedBy=multi-user.target
