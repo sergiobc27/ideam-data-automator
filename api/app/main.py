@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .db import init_db, pool
+from .db import export_pool, init_db, pool
 from .routers import analytics, catalog_routes, export, meta, preview
 from .services import exporter
 from .settings import settings
@@ -48,6 +48,7 @@ async def lifespan(_app: FastAPI):
     yield
     exporter.stop_reconciler()  # para el barrido antes de cerrar el pool
     pool.close()
+    export_pool.close()
 
 
 app = FastAPI(title="IDEAM API", lifespan=lifespan, docs_url=None, redoc_url=None)

@@ -13,7 +13,13 @@ class Settings(BaseSettings):
     export_page_size: int = 10000
 
     rate_limit_export_per_hour: int = 30
-    rate_limit_catalog_per_hour: int = 600
+    # Presupuesto de lecturas POR PROCESO: el limitador de lecturas vive en
+    # memoria de cada worker de uvicorn (app/ratelimit.py) y el servicio corre
+    # con --workers 2, asi que el tope efectivo por IP es ~2x este valor.
+    # 300 reconoce ese factor para que el presupuesto real por IP siga siendo
+    # ~600/h como se diseno (auditoria 2026-07-01). Si el numero de workers
+    # cambia, recalibrar.
+    rate_limit_catalog_per_hour: int = 300
 
     # Candados anti-DoS / anti-costo del export.
     # EXPORT_MAX_ROWS: tope de filas estimadas antes de generar (rechazo 413).

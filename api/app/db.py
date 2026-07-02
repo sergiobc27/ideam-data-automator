@@ -1,9 +1,11 @@
 """Pool de conexiones, esquema propio de la API y rate limiting en Postgres."""
 
+import random
+import time
 from pathlib import Path
 
 import psycopg
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 from .settings import settings
 
@@ -13,12 +15,34 @@ from .settings import settings
 # timezone EXPLICITO (auditoria #4): los caggs estan alineados a UTC y el
 # exporter formatea fechas con to_char asumiendo America/Bogota; fijarlo aqui
 # evita que un default a UTC del servidor desplace las fechas 5h en silencio.
+_CONN_KWARGS = {"options": "-c statement_timeout=30000 -c timezone=America/Bogota"}
+
+# check=check_connection (auditoria 2026-07-01): valida la conexion al
+# entregarla; una muerta por un corte del tunel Cloudflare->box se descarta y
+# se entrega otra, en vez de fallar la consulta con OperationalError.
 pool = ConnectionPool(
     settings.database_url,
     min_size=1,
-    max_size=8,
+    max_size=6,
     open=False,
-    kwargs={"options": "-c statement_timeout=30000 -c timezone=America/Bogota"},
+    check=ConnectionPool.check_connection,
+    kwargs=_CONN_KWARGS,
+)
+
+# Pool DEDICADO a las conexiones LARGAS del export (COPY/stream/count con
+# statement_timeout de 900s), separado del pool web (auditoria 2026-07-01):
+# asi los jobs largos no acaparan las conexiones que sirven lecturas y
+# /api/ready. max_size=2 = max_workers del EXECUTOR del exporter (cada job
+# retiene UNA conexion larga a la vez); las queries cortas del flujo de export
+# (claim atomico, _update de progreso, catalogo, reconciler) siguen usando el
+# pool web. Total por proceso: 6 + 2 = 8, igual que antes de separar.
+export_pool = ConnectionPool(
+    settings.database_url,
+    min_size=1,
+    max_size=2,
+    open=False,
+    check=ConnectionPool.check_connection,
+    kwargs=_CONN_KWARGS,
 )
 
 _SCHEMA_API = Path(__file__).with_name("schema_api.sql").read_text(encoding="utf-8")
@@ -26,6 +50,7 @@ _SCHEMA_API = Path(__file__).with_name("schema_api.sql").read_text(encoding="utf
 
 def init_db():
     pool.open()
+    export_pool.open()
     with pool.connection() as conn:
         try:
             # lock_timeout corto: si un lock (p. ej. un REFRESH MATERIALIZED VIEW
@@ -39,6 +64,35 @@ def init_db():
             # se continúa (un reinicio durante un refresh de mv_catalogo ya no cae).
             conn.rollback()
             print(f"[init_db] esquema no reaplicado por lock/timeout; continúo (objetos ya existen): {exc}")
+
+
+# Reintento corto para LECTURAS idempotentes (auditoria 2026-07-01): el tunel
+# Cloudflare->box tiene hipos transitorios (502/cortes) que matan conexiones a
+# mitad de consulta; sin reintento, cada hipo se volvia un 500 visible en
+# endpoints re-ejecutables sin efectos (meta, date-range, catalogo, preview).
+# SOLO lecturas: las escrituras y el flujo de export (INSERT de export_jobs,
+# claim atomico de _run_job) NO pasan por aqui, reintentarlas podria duplicar
+# efectos.
+_READ_ATTEMPTS = 3  # 1 intento + 2 reintentos
+_READ_BACKOFF_S = 0.1  # base corta, crece linealmente y lleva jitter
+
+
+def read_with_retry(operation):
+    """Ejecuta ``operation()`` (una lectura idempotente que abre SU PROPIA
+    conexion via ``pool.connection()``) reintentando ante errores de conexion
+    (OperationalError/InterfaceError). Cada reintento toma una conexion fresca
+    del pool; las muertas las descarta el ``check`` del pool. PoolTimeout
+    (subclase de OperationalError) NO se reintenta: pool agotado no es un hipo
+    del tunel y reintentar solo agrava la contencion."""
+    for attempt in range(1, _READ_ATTEMPTS + 1):
+        try:
+            return operation()
+        except PoolTimeout:
+            raise
+        except (psycopg.OperationalError, psycopg.InterfaceError):
+            if attempt == _READ_ATTEMPTS:
+                raise
+            time.sleep(_READ_BACKOFF_S * attempt + random.uniform(0.0, 0.1))
 
 
 # Poda de ventanas viejas: sin esto la tabla crece una fila por (scope, ip)

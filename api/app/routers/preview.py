@@ -3,7 +3,7 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..db import pool
+from ..db import pool, read_with_retry
 from ..http_utils import client_ip as _client_ip
 from ..models import QueryPayload
 from ..normalize import build_filters
@@ -115,22 +115,23 @@ def _resumen_desde_agregado(conn, payload, dataset):
         params["end"] = f"{end_excl.isoformat()}T00:00:00+00:00"
 
     where = " AND ".join(clauses)
+    # Zonas en la MISMA pasada via subconsulta (auditoria 2026-07-01): antes,
+    # array_agg(DISTINCT codigoestacion) materializaba todos los codigos en
+    # Postgres y en Python solo para reenviarlos a una segunda query cuyo unico
+    # proposito era count(DISTINCT zona_hidrografica). Ahora el conteo de zonas
+    # se resuelve en SQL, sin array intermedio ni segundo round-trip.
     fila = conn.execute(
         "SELECT coalesce(sum(n),0)::bigint, count(DISTINCT codigoestacion), "
         "       count(DISTINCT municipio), count(DISTINCT departamento), "
-        "       min(dia), max(dia), array_agg(DISTINCT codigoestacion) "
+        "       min(dia), max(dia), "
+        "       (SELECT count(DISTINCT e.zona_hidrografica) FROM estaciones e "
+        "        WHERE e.zona_hidrografica IS NOT NULL AND e.codigoestacion IN "
+        f"       (SELECT codigoestacion FROM obs_diario WHERE {where})) "
         f"FROM obs_diario WHERE {where}",
         params,
     ).fetchone()
-    row_count, stations, municipalities, departments, start, end, codigos_res = fila
-    zones = 0
-    if codigos_res:
-        zones = conn.execute(
-            "SELECT count(DISTINCT zona_hidrografica) FROM estaciones "
-            "WHERE codigoestacion = ANY(%(c)s) AND zona_hidrografica IS NOT NULL",
-            {"c": codigos_res},
-        ).fetchone()[0]
-    return row_count, stations, municipalities, departments, zones, start, end
+    row_count, stations, municipalities, departments, start, end, zones = fila
+    return row_count, stations, municipalities, departments, zones or 0, start, end
 
 
 @router.post("/api/preview")
@@ -140,23 +141,28 @@ def preview(payload: QueryPayload, request: Request):
     where, params, dataset, _canonicals = build_filters(payload)
     cols = ", ".join(ROW_COLUMNS)
 
-    with pool.connection() as conn:
-        (row_count, stations, municipalities, departments, zones,
-         start, end) = _resumen_desde_agregado(conn, payload, dataset)
-        # Acotar el ORDER BY ... DESC con el techo real del dataset (max de
-        # obs_diario): sin esto, en datasets que terminaron en el pasado (mar,
-        # hasta 2020) el ChunkAppend arrancaba en 2026 y recorría ~6 años de
-        # chunks vacíos antes de juntar 200 filas -> timeout. Con el techo,
-        # el scan empieza en el chunk correcto. Lógica en _preview_techo_clause.
-        techo, techo_params = _preview_techo_clause(end, params)
-        row_params = dict(params, limit=settings.preview_limit, **techo_params)
-        rows = []
-        if row_count:
-            rows = conn.execute(
-                f"SELECT {cols} FROM observaciones WHERE {where}{techo} "
-                "ORDER BY fechaobservacion DESC LIMIT %(limit)s",
-                row_params,
-            ).fetchall()
+    def _consulta():
+        with pool.connection() as conn:
+            (row_count, stations, municipalities, departments, zones,
+             start, end) = _resumen_desde_agregado(conn, payload, dataset)
+            # Acotar el ORDER BY ... DESC con el techo real del dataset (max de
+            # obs_diario): sin esto, en datasets que terminaron en el pasado (mar,
+            # hasta 2020) el ChunkAppend arrancaba en 2026 y recorría ~6 años de
+            # chunks vacíos antes de juntar 200 filas -> timeout. Con el techo,
+            # el scan empieza en el chunk correcto. Lógica en _preview_techo_clause.
+            techo, techo_params = _preview_techo_clause(end, params)
+            row_params = dict(params, limit=settings.preview_limit, **techo_params)
+            rows = []
+            if row_count:
+                rows = conn.execute(
+                    f"SELECT {cols} FROM observaciones WHERE {where}{techo} "
+                    "ORDER BY fechaobservacion DESC LIMIT %(limit)s",
+                    row_params,
+                ).fetchall()
+            return row_count, stations, municipalities, departments, zones, start, end, rows
+
+    (row_count, stations, municipalities, departments, zones,
+     start, end, rows) = read_with_retry(_consulta)
     station_filters = (payload.catalogFilters or {}).get("stations") or []
 
     return {
