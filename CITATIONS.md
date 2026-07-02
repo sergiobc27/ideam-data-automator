@@ -54,8 +54,8 @@ Cada método del código se apoya en una referencia estándar reconocida.
 - **Sneyers, R. (1990).** *On the Statistical Analysis of Series of
   Observations.* Technical Note No. 143, WMO-No. 415. Organización
   Meteorológica Mundial. Fundamento de las pruebas estadísticas sobre series
-  de observaciones aplicadas en la API (bondad de ajuste y análisis de
-  tendencia tipo Mann-Kendall en `stationarity.py`).
+  de observaciones aplicadas en la API: análisis de tendencia y
+  estacionariedad (Mann-Kendall, Pettitt) en `stationarity.py`.
 
 ## Índice de sequía SPI
 
