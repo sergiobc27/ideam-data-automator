@@ -424,6 +424,11 @@ def _run_job(job_id):
     # Métricas de la vía rápida (vienen de una query agregada, no del bucle).
     station_count = zone_count = None
     fast_csv = set(formats or ()) == {"csv"}
+    # group_where realmente escritos -> conteo exacto al final. Se define aqui
+    # (no dentro del elif fast_csv) para que la rama sin filas (row_count == 0)
+    # no deje el nombre sin ligar y el `if fast_csv and written_groups` de abajo
+    # no reviente con NameError en un export solo-CSV vacio.
+    written_groups: list = []
 
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -442,7 +447,6 @@ def _run_job(job_id):
                     f"{where} AND departamento IS NOT DISTINCT FROM %(g_dep)s "
                     "AND municipio IS NOT DISTINCT FROM %(g_mun)s"
                 )
-                written_groups = []  # group_where realmente escritos -> conteo exacto al final
                 for dep, mun in groups:
                     group_params = {**params, "g_dep": dep, "g_mun": mun}
                     name = f"{slug(dataset_name)}_{slug(dep)}_{slug(mun)}_{now.strftime('%H%M_%d%m%y')}"
