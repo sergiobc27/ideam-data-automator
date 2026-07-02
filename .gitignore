@@ -13,6 +13,9 @@ htmlcov/
 env/
 build/
 dist/
+# PyInstaller (ejecutable .exe de Windows): pesado, no versionar
+build_exe/
+dist_exe/
 *.egg-info/
 
 # Environment and secrets
@@ -22,9 +25,6 @@ dist/
 .pypirc
 *.key
 *.pem
-
-# Stale virtualenv pending manual deletion
-.venv-bloqueado-borrar-luego/
 
 # Runtime data and generated artifacts
 data/
@@ -41,7 +41,6 @@ scratch/
 *.log
 
 # Local legacy/gui artifacts not included in the clean public package
-scripts/legacy/
 src/gui/
 figma_design_prompt.md
 
