@@ -1,4 +1,4 @@
-"""Command line entrypoint for IDEAM Hydrology Data Automator."""
+"""Command line entrypoint for IDEAM Data Automator."""
 
 from __future__ import annotations
 

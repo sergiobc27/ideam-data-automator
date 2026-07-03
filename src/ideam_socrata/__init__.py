@@ -1,4 +1,4 @@
-"""IDEAM Hydrology Data Automator package."""
+"""IDEAM Data Automator package."""
 
 from importlib.metadata import version, PackageNotFoundError
 
