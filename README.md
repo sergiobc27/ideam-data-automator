@@ -36,6 +36,13 @@ flowchart LR
 
 ¿Primera vez? Sigue estos pasos tal cual. No necesitas saber programar.
 
+> **¿Sin Python y sin comandos?** También hay un **ejecutable de doble clic
+> para Windows**: descarga `IDEAM-Data-Automator.exe` desde la
+> [página de Releases](https://github.com/sergiobc27/ideam-data-automator/releases),
+> ábrelo con doble clic y saltas directo al *Paso 0* de abajo. Si Windows
+> muestra el aviso azul de protección, pulsa "Más información" y luego
+> "Ejecutar de todas formas" (aparece con cualquier programa sin firma comercial).
+
 ### Antes de empezar (solo la primera vez)
 
 1. **Instala Python** (3.10 o superior) desde
