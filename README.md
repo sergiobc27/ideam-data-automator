@@ -14,6 +14,24 @@ Costa (CUC), Barranquilla. Automatiza en minutos lo que manualmente toma horas:
 consultar estación por estación en los portales del IDEAM, descargar, limpiar
 y organizar los archivos.
 
+> **Guías visuales**: si prefieres ver el proceso completo en una sola página,
+> descarga la [infografía del flujo local](docs/infografias/infografia-flujo-local.pdf)
+> o el [instructivo paso a paso](docs/infografias/instructivo-local.pdf) (PDF).
+> La versión web de la plataforma vive en [ideam.sergiobc.com](https://ideam.sergiobc.com).
+
+## Cómo funciona
+
+```mermaid
+flowchart LR
+    A["datos.gov.co<br/>(Socrata, 13 datasets)"] -->|"extracción paginada<br/>con reintentos"| B["Validación y<br/>transformación"]
+    B -->|"deduplicación<br/>fechas reales<br/>homologación territorial"| C["Parquet + CSV<br/>organizados por<br/>DEPARTAMENTO/MUNICIPIO"]
+    C --> D["RESUMEN por descarga:<br/>cobertura real, filas<br/>por estación"]
+    style A fill:#1d4ed8,color:#fff
+    style B fill:#0e7490,color:#fff
+    style C fill:#15803d,color:#fff
+    style D fill:#a16207,color:#fff
+```
+
 ## Instalación
 
 Requiere Python 3.10+. La forma recomendada es **pipx**, que instala la
@@ -45,18 +63,44 @@ ideam-socrata tui
 ```
 
 Asistente de pantalla completa con navegación por flechas, selección con
-checkmarks y panel de resumen en vivo:
+checkmarks y panel de resumen en vivo. Así se ve el recorrido completo:
 
-1. **Variable**: las 21 variables del IDEAM (precipitación, niveles de río y mar,
-   temperaturas, viento, humedad, presión, calidad de aire/agua, y más), con buscador.
-   Son **13 datasets estándar** (las series hidrometeorológicas que suman
-   ≈745 millones de observaciones) más **8 variables especiales**: 13 + 8 = 21.
-2. **Departamentos**: selección múltiple + filtros avanzados por zona
-   hidrográfica, categoría, tecnología, estado, corriente, entidad, municipio
-   o códigos de estación manuales.
-3. **Años**: detecta el histórico disponible **para tu filtro** (estaciones y
-   rango real de fechas) antes de descargar.
-4. **Descarga**: paralela, con progreso en vivo (filas/s, bloques, tiempo restante).
+**0. Acuerdo de uso**: al abrir por primera vez, la herramienta explica de
+dónde vienen los datos y sus condiciones de uso académico.
+
+<p align="center">
+  <img src="docs/img/tui-0-acuerdo.svg" alt="Pantalla de acuerdo de uso de la TUI" width="760">
+</p>
+
+**1. Variable**: las 21 variables del IDEAM (precipitación, niveles de río y mar,
+temperaturas, viento, humedad, presión, calidad de aire/agua, y más), con buscador.
+Son **13 datasets estándar** (las series hidrometeorológicas que suman
+≈745 millones de observaciones) más **8 variables especiales**: 13 + 8 = 21.
+
+<p align="center">
+  <img src="docs/img/tui-1-variable.svg" alt="Paso 1 de la TUI: selección de variable" width="760">
+</p>
+
+**2. Departamentos**: selección múltiple + filtros avanzados por zona
+hidrográfica, categoría, tecnología, estado, corriente, entidad, municipio
+o códigos de estación manuales.
+
+<p align="center">
+  <img src="docs/img/tui-2-deptos.svg" alt="Paso 2 de la TUI: selección de departamentos" width="760">
+</p>
+
+**3. Años**: detecta el histórico disponible **para tu filtro** (estaciones y
+rango real de fechas) antes de descargar.
+
+<p align="center">
+  <img src="docs/img/tui-3-anios.svg" alt="Paso 3 de la TUI: selección de años" width="760">
+</p>
+
+**4. Descarga**: paralela, con progreso en vivo (filas/s, bloques, tiempo restante).
+
+<p align="center">
+  <img src="docs/img/tui-4-descarga.svg" alt="Paso 4 de la TUI: descarga con progreso en vivo" width="760">
+</p>
 
 ### Asistente clásico de consola
 
@@ -124,12 +168,34 @@ src/ideam_socrata/
   query_validation.py  # Validación de variantes territoriales
   exporting.py         # Export Parquet/CSV + reporte de cobertura
   validation.py        # Modelos Pydantic
+api/                   # API FastAPI que sirve el espejo de datos
+deploy/                # Ingestor, esquema TimescaleDB y operación del servidor
 tests/                 # Pruebas unitarias
+docs/                  # Guías, infografías y validación técnica
 ```
 
 ## Arquitectura del proyecto
 
 La plataforma completa se reparte en **dos repositorios** complementarios:
+
+```mermaid
+flowchart TB
+    subgraph repo1["sergiobc27/ideam-data-automator (este repo)"]
+        CLI["Paquete Python<br/>CLI + TUI de descarga"]
+        DB["Espejo PostgreSQL +<br/>TimescaleDB (Oracle Cloud)"]
+        API["API FastAPI"]
+        DB --- API
+    end
+    subgraph repo2["sergiobc27/website"]
+        WEB["Frontend React/Vite +<br/>Cloudflare Worker"]
+    end
+    SOC["Socrata<br/>datos.gov.co"] --> CLI
+    SOC --> DB
+    API -->|"Cloudflare Tunnel"| WEB
+    WEB --> USR["ideam.sergiobc.com"]
+    style SOC fill:#1d4ed8,color:#fff
+    style USR fill:#15803d,color:#fff
+```
 
 - **Este repo (`ideam-data-automator`)**: el paquete Python instalable (CLI y
   TUI de descarga), el espejo PostgreSQL + TimescaleDB del histórico del IDEAM
@@ -144,6 +210,17 @@ La plataforma completa se reparte en **dos repositorios** complementarios:
 La herramienta local de este repo funciona por sí sola contra Socrata (no
 necesita el servidor); el espejo, la API y la web son la capa de consulta y
 análisis construida encima.
+
+## Documentación
+
+| Documento | Qué contiene |
+| --- | --- |
+| [Infografía del flujo local](docs/infografias/infografia-flujo-local.pdf) | El proceso completo de descarga en una página visual |
+| [Instructivo paso a paso](docs/infografias/instructivo-local.pdf) | Guía de instalación y uso con capturas |
+| [docs/SERVIDOR.md](docs/SERVIDOR.md) | Operación del espejo de datos y la API |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Procedimientos de guardia y recuperación |
+| [docs/HISTORIA.md](docs/HISTORIA.md) | Historia y evolución del proyecto |
+| [docs/validacion/](docs/validacion/) | Validación externa de las curvas IDF |
 
 ## Pruebas
 
