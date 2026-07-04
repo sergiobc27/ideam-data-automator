@@ -14,6 +14,12 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
 > hidrometeorológicas, superación de los límites de la API Socrata y evolución
 > hacia una plataforma web de monitoreo y análisis hídrico.
 
+## [1.2.0.post1] - 2026-07-03
+
+*Solo documentación, el código es idéntico al de 1.2.0: el README pasa a ser
+una guía paso a paso con imágenes que indica qué hacer en cada pantalla,
+pensada para personas sin experiencia en programación.*
+
 ## [1.2.0] - 2026-07-03
 
 *Rediseño visual de la TUI y pulido de robustez de la herramienta de terminal,
