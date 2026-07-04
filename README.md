@@ -32,19 +32,29 @@ flowchart LR
     style D fill:#a16207,color:#fff
 ```
 
-## Instalación
+## Guía paso a paso: tus primeros datos en 5 minutos
 
-Requiere Python 3.10+. La forma recomendada es **pipx**, que instala la
-herramienta de forma aislada y deja el comando `ideam-socrata` listo en tu PATH:
+¿Primera vez? Sigue estos pasos tal cual. No necesitas saber programar.
 
-```powershell
-pip install --user pipx
-pipx ensurepath
-pipx install ideam-data-automator
-```
+### Antes de empezar (solo la primera vez)
 
-Cierra y vuelve a abrir la terminal tras `pipx ensurepath`. También funciona el
-clásico `pip install ideam-data-automator`.
+1. **Instala Python** (3.10 o superior) desde
+   [python.org/downloads](https://www.python.org/downloads/). En Windows,
+   marca la casilla **"Add Python to PATH"** en la primera pantalla del instalador.
+2. **Abre una terminal**: presiona la tecla Windows, escribe `PowerShell` y
+   presiona Enter.
+3. **Instala la herramienta**: copia y pega estas tres líneas, una por una:
+
+   ```powershell
+   pip install --user pipx
+   pipx ensurepath
+   pipx install ideam-data-automator
+   ```
+
+4. **Cierra la terminal y ábrela de nuevo** (para que reconozca el comando).
+
+Usamos **pipx** porque instala la herramienta aislada y deja el comando listo
+en tu PATH; el clásico `pip install ideam-data-automator` también funciona.
 
 > **¿La terminal dice "ideam-socrata no se reconoce como comando"?**
 > Es que la carpeta de scripts de Python no quedó en el PATH (pasa seguido en
@@ -54,53 +64,79 @@ clásico `pip install ideam-data-automator`.
 > python -m ideam_socrata.cli tui
 > ```
 
-## Uso
+### El recorrido, pantalla por pantalla
 
-### Interfaz visual (recomendada)
+**Abre la herramienta**: escribe esto en la terminal y presiona Enter:
 
 ```powershell
 ideam-socrata tui
 ```
 
-Asistente de pantalla completa con navegación por flechas, selección con
-checkmarks y panel de resumen en vivo. Así se ve el recorrido completo:
+**Paso 0 · Acepta los términos**
 
-**0. Acuerdo de uso**: al abrir por primera vez, la herramienta explica de
-dónde vienen los datos y sus condiciones de uso académico.
+> **Qué hacer**: lee las condiciones de uso (datos abiertos del IDEAM, uso
+> académico) y haz clic en el botón verde **"Acepto los términos"**.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-0-acuerdo.svg" alt="Pantalla de acuerdo de uso de la TUI" width="760">
 </p>
 
-**1. Variable**: las 21 variables del IDEAM (precipitación, niveles de río y mar,
-temperaturas, viento, humedad, presión, calidad de aire/agua, y más), con buscador.
-Son **13 datasets estándar** (las series hidrometeorológicas que suman
-≈745 millones de observaciones) más **8 variables especiales**: 13 + 8 = 21.
+**Paso 1 · Elige la variable**
+
+> **Qué hacer**: escribe el nombre de lo que buscas (por ejemplo
+> `precipitación`), baja con la flecha ↓ hasta la opción que quieres y
+> presiona **Enter**.
+
+Hay 21 variables disponibles: precipitación, niveles de río y mar,
+temperaturas, viento, humedad, presión, calidad de aire/agua, y más.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-1-variable.svg" alt="Paso 1 de la TUI: selección de variable" width="760">
 </p>
 
-**2. Departamentos**: selección múltiple + filtros avanzados por zona
-hidrográfica, categoría, tecnología, estado, corriente, entidad, municipio
-o códigos de estación manuales.
+**Paso 2 · Marca los departamentos**
+
+> **Qué hacer**: muévete con las flechas ↑↓ y presiona **Espacio** para
+> marcar con ✓ cada departamento que te interese (puedes marcar varios).
+> Al terminar, haz clic en **"Continuar"**.
+
+Si necesitas afinar más, ahí mismo hay filtros avanzados: zona hidrográfica,
+municipio, categoría de estación, o códigos de estación escritos a mano.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-2-deptos.svg" alt="Paso 2 de la TUI: selección de departamentos" width="760">
 </p>
 
-**3. Años**: detecta el histórico disponible **para tu filtro** (estaciones y
-rango real de fechas) antes de descargar.
+**Paso 3 · Revisa los años**
+
+> **Qué hacer**: la herramienta consulta cuántos datos existen de verdad para
+> tu selección (estaciones y rango real de fechas). Revisa el rango de años
+> propuesto, ajústalo si quieres, y presiona **Descargar**.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-3-anios.svg" alt="Paso 3 de la TUI: selección de años" width="760">
 </p>
 
-**4. Descarga**: paralela, con progreso en vivo (filas/s, bloques, tiempo restante).
+**Paso 4 · Espera la descarga**
+
+> **Qué hacer**: nada, solo espera. Verás el progreso en vivo (filas por
+> segundo y tiempo restante). Al terminar, presiona la tecla **O** para abrir
+> la carpeta con tus archivos, o **N** para hacer otra consulta.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-4-descarga.svg" alt="Paso 4 de la TUI: descarga con progreso en vivo" width="760">
 </p>
+
+**¿Y ahora?** Tus archivos quedaron en `Documentos\IDEAM_Data\`, organizados
+por departamento y municipio, listos para abrir en Excel (CSV) o en
+PowerBI/pandas (Parquet). El archivo `RESUMEN_*.txt` te dice cuántos datos
+trajo cada estación.
+
+> ¿Prefieres no usar la terminal para nada? En
+> [ideam.sergiobc.com](https://ideam.sergiobc.com) está la versión web: los
+> mismos datos desde el navegador, sin instalar nada.
+
+## Otros modos de uso
 
 ### Asistente clásico de consola
 
