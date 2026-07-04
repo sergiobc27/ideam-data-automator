@@ -14,11 +14,12 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
 > hidrometeorológicas, superación de los límites de la API Socrata y evolución
 > hacia una plataforma web de monitoreo y análisis hídrico.
 
-## [1.2.0] - 2026-06-25
+## [1.2.0] - 2026-07-03
 
 *Rediseño visual de la TUI y pulido de robustez de la herramienta de terminal,
-derivados de una auditoría multiagente del paquete instalable. Compatible hacia
-atrás: no cambian los comandos ni los formatos de salida.*
+derivados de una auditoría multiagente del paquete instalable, más las
+correcciones de las auditorías de fin de junio. Compatible hacia atrás: no
+cambian los comandos ni los formatos de salida.*
 
 ### Herramienta de terminal (CLI + TUI)
 
@@ -47,10 +48,20 @@ atrás: no cambian los comandos ni los formatos de salida.*
 - `requests` pasa a ser dependencia principal (lo usan los comandos `datasets` y
   `download`); antes solo llegaba de forma indirecta a través de `sodapy`.
 - Se requiere `textual >= 2.0` para las nuevas capacidades visuales de la TUI.
+- **La configuración se carga solo cuando se necesita**: importar el paquete ya
+  no exige tener un `.env` presente, lo que facilita usarlo como librería y
+  empaquetarlo como ejecutable.
+- Receta de empaquetado a `.exe` de Windows versionada en `packaging/` (icono
+  propio y sin arrastrar dependencias del modo servidor al ejecutable).
 
 #### Calidad
 - 27 pruebas nuevas (entrypoint de la CLI, escrituras atómicas, validación de
   cargas y empaquetado). El paquete pasa de 79 a 106 pruebas.
+- Los umbrales de plausibilidad física de cada variable (por ejemplo, cuánta
+  lluvia diaria es físicamente posible) quedan centralizados en un único módulo
+  (`physical_ranges`), la referencia que usa la capa de análisis.
+- Textos internos y docstrings renombrados al nombre oficial del proyecto,
+  **IDEAM Data Automator**.
 
 ## [1.1.0] - 2026-06-19
 
