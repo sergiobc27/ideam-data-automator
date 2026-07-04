@@ -36,6 +36,9 @@ docs/*
 !docs/RUNBOOK.md
 # Artefactos de validacion IDF (insumos de la tesis: reproducibles y citables)
 !docs/validacion/
+# Material visual del README (capturas de la TUI e infografias)
+!docs/img/
+!docs/infografias/
 logs/
 scratch/
 *.log
