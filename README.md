@@ -3,7 +3,7 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20562858.svg)](https://doi.org/10.5281/zenodo.20562858)
 [![PyPI](https://img.shields.io/pypi/v/ideam-data-automator.svg)](https://pypi.org/project/ideam-data-automator/)
 [![Python](https://img.shields.io/pypi/pyversions/ideam-data-automator.svg)](https://pypi.org/project/ideam-data-automator/)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/sergiobc27/ideam-data-automator/blob/main/LICENSE)
 
 Herramienta en Python para **extraer, validar, organizar y descargar** datos
 hidrometeorológicos del IDEAM publicados en Socrata / Datos Abiertos Colombia
@@ -15,8 +15,8 @@ consultar estación por estación en los portales del IDEAM, descargar, limpiar
 y organizar los archivos.
 
 > **Guías visuales**: si prefieres ver el proceso completo en una sola página,
-> descarga la [infografía del flujo local](docs/infografias/infografia-flujo-local.pdf)
-> o el [instructivo paso a paso](docs/infografias/instructivo-local.pdf) (PDF).
+> descarga la [infografía del flujo local](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/infografias/infografia-flujo-local.pdf)
+> o el [instructivo paso a paso](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/infografias/instructivo-local.pdf) (PDF).
 > La versión web de la plataforma vive en [ideam.sergiobc.com](https://ideam.sergiobc.com).
 
 ## Cómo funciona
@@ -69,7 +69,7 @@ checkmarks y panel de resumen en vivo. Así se ve el recorrido completo:
 dónde vienen los datos y sus condiciones de uso académico.
 
 <p align="center">
-  <img src="docs/img/tui-0-acuerdo.svg" alt="Pantalla de acuerdo de uso de la TUI" width="760">
+  <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-0-acuerdo.svg" alt="Pantalla de acuerdo de uso de la TUI" width="760">
 </p>
 
 **1. Variable**: las 21 variables del IDEAM (precipitación, niveles de río y mar,
@@ -78,7 +78,7 @@ Son **13 datasets estándar** (las series hidrometeorológicas que suman
 ≈745 millones de observaciones) más **8 variables especiales**: 13 + 8 = 21.
 
 <p align="center">
-  <img src="docs/img/tui-1-variable.svg" alt="Paso 1 de la TUI: selección de variable" width="760">
+  <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-1-variable.svg" alt="Paso 1 de la TUI: selección de variable" width="760">
 </p>
 
 **2. Departamentos**: selección múltiple + filtros avanzados por zona
@@ -86,20 +86,20 @@ hidrográfica, categoría, tecnología, estado, corriente, entidad, municipio
 o códigos de estación manuales.
 
 <p align="center">
-  <img src="docs/img/tui-2-deptos.svg" alt="Paso 2 de la TUI: selección de departamentos" width="760">
+  <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-2-deptos.svg" alt="Paso 2 de la TUI: selección de departamentos" width="760">
 </p>
 
 **3. Años**: detecta el histórico disponible **para tu filtro** (estaciones y
 rango real de fechas) antes de descargar.
 
 <p align="center">
-  <img src="docs/img/tui-3-anios.svg" alt="Paso 3 de la TUI: selección de años" width="760">
+  <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-3-anios.svg" alt="Paso 3 de la TUI: selección de años" width="760">
 </p>
 
 **4. Descarga**: paralela, con progreso en vivo (filas/s, bloques, tiempo restante).
 
 <p align="center">
-  <img src="docs/img/tui-4-descarga.svg" alt="Paso 4 de la TUI: descarga con progreso en vivo" width="760">
+  <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/tui-4-descarga.svg" alt="Paso 4 de la TUI: descarga con progreso en vivo" width="760">
 </p>
 
 ### Asistente clásico de consola
@@ -151,7 +151,7 @@ SOCRATA_TIMEOUT=300
 Para la herramienta local basta con un solo `SOCRATA_APP_TOKEN`. El modo
 servidor (espejo completo) usa en cambio `SOCRATA_APP_TOKENS` (en plural, varios
 tokens separados por coma que se rotan en round-robin) para sostener las
-descargas masivas; ver [docs/SERVIDOR.md](docs/SERVIDOR.md).
+descargas masivas; ver [docs/SERVIDOR.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/SERVIDOR.md).
 
 ## Estructura
 
@@ -201,8 +201,8 @@ flowchart TB
   TUI de descarga), el espejo PostgreSQL + TimescaleDB del histórico del IDEAM
   y la API FastAPI (`api/`) que lo sirve, desplegados en un servidor de Oracle
   Cloud. La operación del servidor está documentada en
-  [docs/SERVIDOR.md](docs/SERVIDOR.md) y los procedimientos de guardia y
-  recuperación en [docs/RUNBOOK.md](docs/RUNBOOK.md).
+  [docs/SERVIDOR.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/SERVIDOR.md) y los procedimientos de guardia y
+  recuperación en [docs/RUNBOOK.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/RUNBOOK.md).
 - **[`sergiobc27/website`](https://github.com/sergiobc27/website)**: el
   frontend web (React/Vite) y el Cloudflare Worker que hace de proxy hacia la
   API, publicados en [ideam.sergiobc.com](https://ideam.sergiobc.com).
@@ -215,12 +215,12 @@ análisis construida encima.
 
 | Documento | Qué contiene |
 | --- | --- |
-| [Infografía del flujo local](docs/infografias/infografia-flujo-local.pdf) | El proceso completo de descarga en una página visual |
-| [Instructivo paso a paso](docs/infografias/instructivo-local.pdf) | Guía de instalación y uso con capturas |
-| [docs/SERVIDOR.md](docs/SERVIDOR.md) | Operación del espejo de datos y la API |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Procedimientos de guardia y recuperación |
-| [docs/HISTORIA.md](docs/HISTORIA.md) | Historia y evolución del proyecto |
-| [docs/validacion/](docs/validacion/) | Validación externa de las curvas IDF |
+| [Infografía del flujo local](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/infografias/infografia-flujo-local.pdf) | El proceso completo de descarga en una página visual |
+| [Instructivo paso a paso](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/infografias/instructivo-local.pdf) | Guía de instalación y uso con capturas |
+| [docs/SERVIDOR.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/SERVIDOR.md) | Operación del espejo de datos y la API |
+| [docs/RUNBOOK.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/RUNBOOK.md) | Procedimientos de guardia y recuperación |
+| [docs/HISTORIA.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/HISTORIA.md) | Historia y evolución del proyecto |
+| [docs/validacion/](https://github.com/sergiobc27/ideam-data-automator/tree/main/docs/validacion) | Validación externa de las curvas IDF |
 
 ## Pruebas
 
@@ -231,7 +231,7 @@ python -m pytest tests/
 ## Cita académica
 
 Si usas esta herramienta en tu investigación, cítala con los metadatos de
-[`CITATION.cff`](CITATION.cff) (GitHub muestra el botón *"Cite this repository"*).
+[`CITATION.cff`](https://github.com/sergiobc27/ideam-data-automator/blob/main/CITATION.cff) (GitHub muestra el botón *"Cite this repository"*).
 
 ## Limitaciones y preguntas frecuentes
 
