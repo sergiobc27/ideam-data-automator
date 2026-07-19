@@ -14,6 +14,29 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
 > hidrometeorológicas, superación de los límites de la API Socrata y evolución
 > hacia una plataforma web de monitoreo y análisis hídrico.
 
+## [1.2.1] - 2026-07-19
+
+*La instalación funciona a la primera para quien no sabe programar.*
+
+### Agregado
+
+- El paquete es ejecutable como módulo: `python -m ideam_socrata tui` (y
+  cualquier otro subcomando). Es la vía que funciona aunque la carpeta Scripts
+  de Python no esté en el PATH, el caso más común en Windows donde
+  `ideam-socrata` "no se reconoce como comando".
+
+### Corregido
+
+- Guía de instalación del README: la ruta principal pasa a ser
+  `python -m pip install ideam-data-automator`, que no depende del PATH. La
+  secuencia anterior con pipx fallaba a la primera en Windows
+  (`pip install --user pipx` deja `pipx.exe` fuera del PATH, así que
+  `pipx ensurepath` respondía "no se reconoce como comando") y su nota de
+  rescate sugería `python -m ideam_socrata.cli tui`, que con pipx no puede
+  funcionar porque el paquete queda aislado en otro entorno.
+- Instructivo PDF (`docs/infografias/instructivo-local.pdf`) actualizado con
+  los mismos comandos corregidos.
+
 ## [1.2.0.post1] - 2026-07-03
 
 *Solo documentación, el código es idéntico al de 1.2.0: el README pasa a ser
