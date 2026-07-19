@@ -1,0 +1,63 @@
+<svg viewBox="0 0 1240 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cómo funciona: del portal oficial a tu computador en 4 pasos automáticos">
+  <defs>
+    <marker id="flecha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#C9A227"/>
+    </marker>
+  </defs>
+  <style>
+    .base{font-family:'Segoe UI',-apple-system,'Helvetica Neue',Arial,sans-serif}
+    .kicker{font-size:15px;font-weight:700;letter-spacing:3px;fill:#C9A227}
+    .num{font-size:20px;font-weight:800;fill:#0f0f0f}
+    .titulo{font-size:23px;font-weight:800;fill:#f3f4f6}
+    .detalle{font-size:16.5px;fill:#b8bcc4}
+  </style>
+
+  <rect x="0" y="0" width="1240" height="340" rx="22" fill="#0f1115" stroke="#2a2e37" stroke-width="1.5"/>
+  <text x="34" y="46" class="base kicker">DEL PORTAL OFICIAL A TU COMPUTADOR · 4 PASOS AUTOMÁTICOS</text>
+
+  <!-- Paso 1 -->
+  <rect x="24" y="86" width="260" height="212" rx="16" fill="#171a21" stroke="#1d4ed8" stroke-width="2.5"/>
+  <circle cx="54" cy="86" r="18" fill="#1d4ed8"/>
+  <text x="54" y="93" text-anchor="middle" class="base num" fill="#ffffff">1</text>
+  <text x="154" y="132" text-anchor="middle" class="base titulo">datos.gov.co</text>
+  <text x="154" y="162" text-anchor="middle" class="base detalle">La fuente oficial de los</text>
+  <text x="154" y="186" text-anchor="middle" class="base detalle">datos abiertos del IDEAM</text>
+  <text x="154" y="210" text-anchor="middle" class="base detalle">(Socrata, 13 conjuntos</text>
+  <text x="154" y="234" text-anchor="middle" class="base detalle">de datos, 21 variables)</text>
+
+  <line x1="288" y1="192" x2="328" y2="192" stroke="#C9A227" stroke-width="3" marker-end="url(#flecha)"/>
+
+  <!-- Paso 2 -->
+  <rect x="332" y="86" width="260" height="212" rx="16" fill="#171a21" stroke="#0e7490" stroke-width="2.5"/>
+  <circle cx="362" cy="86" r="18" fill="#0e7490"/>
+  <text x="362" y="93" text-anchor="middle" class="base num" fill="#ffffff">2</text>
+  <text x="462" y="132" text-anchor="middle" class="base titulo">Valida y limpia</text>
+  <text x="462" y="162" text-anchor="middle" class="base detalle">Descarga con reintentos,</text>
+  <text x="462" y="186" text-anchor="middle" class="base detalle">quita duplicados, convierte</text>
+  <text x="462" y="210" text-anchor="middle" class="base detalle">fechas reales y homologa</text>
+  <text x="462" y="234" text-anchor="middle" class="base detalle">nombres territoriales</text>
+
+  <line x1="596" y1="192" x2="636" y2="192" stroke="#C9A227" stroke-width="3" marker-end="url(#flecha)"/>
+
+  <!-- Paso 3 -->
+  <rect x="640" y="86" width="260" height="212" rx="16" fill="#171a21" stroke="#15803d" stroke-width="2.5"/>
+  <circle cx="670" cy="86" r="18" fill="#15803d"/>
+  <text x="670" y="93" text-anchor="middle" class="base num" fill="#ffffff">3</text>
+  <text x="770" y="132" text-anchor="middle" class="base titulo">Organiza en tu PC</text>
+  <text x="770" y="162" text-anchor="middle" class="base detalle">Carpetas por departamento</text>
+  <text x="770" y="186" text-anchor="middle" class="base detalle">y municipio: CSV para Excel</text>
+  <text x="770" y="210" text-anchor="middle" class="base detalle">y Parquet para PowerBI</text>
+  <text x="770" y="234" text-anchor="middle" class="base detalle">o pandas</text>
+
+  <line x1="904" y1="192" x2="944" y2="192" stroke="#C9A227" stroke-width="3" marker-end="url(#flecha)"/>
+
+  <!-- Paso 4 -->
+  <rect x="948" y="86" width="260" height="212" rx="16" fill="#171a21" stroke="#a16207" stroke-width="2.5"/>
+  <circle cx="978" cy="86" r="18" fill="#a16207"/>
+  <text x="978" y="93" text-anchor="middle" class="base num" fill="#ffffff">4</text>
+  <text x="1078" y="132" text-anchor="middle" class="base titulo">Te rinde cuentas</text>
+  <text x="1078" y="162" text-anchor="middle" class="base detalle">Un RESUMEN.txt por</text>
+  <text x="1078" y="186" text-anchor="middle" class="base detalle">descarga: filas por estación,</text>
+  <text x="1078" y="210" text-anchor="middle" class="base detalle">rango real de fechas y</text>
+  <text x="1078" y="234" text-anchor="middle" class="base detalle">completitud mensual</text>
+</svg>

@@ -21,16 +21,9 @@ y organizar los archivos.
 
 ## Cómo funciona
 
-```mermaid
-flowchart LR
-    A["datos.gov.co<br/>(Socrata, 13 datasets)"] -->|"extracción paginada<br/>con reintentos"| B["Validación y<br/>transformación"]
-    B -->|"deduplicación<br/>fechas reales<br/>homologación territorial"| C["Parquet + CSV<br/>organizados por<br/>DEPARTAMENTO/MUNICIPIO"]
-    C --> D["RESUMEN por descarga:<br/>cobertura real, filas<br/>por estación"]
-    style A fill:#1d4ed8,color:#fff
-    style B fill:#0e7490,color:#fff
-    style C fill:#15803d,color:#fff
-    style D fill:#a16207,color:#fff
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/diagrama-como-funciona.svg" alt="Diagrama de 4 pasos: datos.gov.co, valida y limpia, organiza en tu PC, y resumen de cobertura" width="880">
+</p>
 
 ## Guía paso a paso: tus primeros datos en 5 minutos
 
@@ -44,6 +37,10 @@ flowchart LR
 > "Ejecutar de todas formas" (aparece con cualquier programa sin firma comercial).
 
 ### Antes de empezar (solo la primera vez)
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/diagrama-pasos-instalacion.svg" alt="Instalación en 3 pasos: instala Python marcando Add python.exe to PATH, pega el comando python -m pip install ideam-data-automator en PowerShell, y abre la herramienta con ideam-socrata tui" width="880">
+</p>
 
 1. **Instala Python** (3.10 o superior) desde
    [python.org/downloads](https://www.python.org/downloads/). En Windows,
@@ -227,24 +224,9 @@ docs/                  # Guías, infografías y validación técnica
 
 La plataforma completa se reparte en **dos repositorios** complementarios:
 
-```mermaid
-flowchart TB
-    subgraph repo1["sergiobc27/ideam-data-automator (este repo)"]
-        CLI["Paquete Python<br/>CLI + TUI de descarga"]
-        DB["Espejo PostgreSQL +<br/>TimescaleDB (Oracle Cloud)"]
-        API["API FastAPI"]
-        DB --- API
-    end
-    subgraph repo2["sergiobc27/website"]
-        WEB["Frontend React/Vite +<br/>Cloudflare Worker"]
-    end
-    SOC["Socrata<br/>datos.gov.co"] --> CLI
-    SOC --> DB
-    API -->|"Cloudflare Tunnel"| WEB
-    WEB --> USR["ideam.sergiobc.com"]
-    style SOC fill:#1d4ed8,color:#fff
-    style USR fill:#15803d,color:#fff
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/diagrama-arquitectura.svg" alt="Diagrama de arquitectura: datos.gov.co alimenta la herramienta local y el espejo de datos de este repositorio; la API FastAPI sirve el espejo a la plataforma web del repositorio website, publicada en ideam.sergiobc.com" width="880">
+</p>
 
 - **Este repo (`ideam-data-automator`)**: el paquete Python instalable (CLI y
   TUI de descarga), el espejo PostgreSQL + TimescaleDB del histórico del IDEAM
