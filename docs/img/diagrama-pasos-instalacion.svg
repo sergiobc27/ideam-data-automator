@@ -1,0 +1,56 @@
+<svg viewBox="0 0 1240 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Instalación en 3 pasos: instala Python, pega un comando y abre la herramienta">
+  <defs>
+    <marker id="flecha2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#C9A227"/>
+    </marker>
+  </defs>
+  <style>
+    .base{font-family:'Segoe UI',-apple-system,'Helvetica Neue',Arial,sans-serif}
+    .kicker2{font-size:15px;font-weight:700;letter-spacing:3px;fill:#C9A227}
+    .num2{font-size:20px;font-weight:800;fill:#0f0f0f}
+    .titulo2{font-size:22px;font-weight:800;fill:#f3f4f6}
+    .detalle2{font-size:16px;fill:#b8bcc4}
+    .aviso{font-size:15px;font-weight:600;fill:#e8c862}
+    .codigo{font-family:'Cascadia Code',Consolas,Menlo,monospace;font-size:16.5px;fill:#7ee0a3}
+  </style>
+
+  <rect x="0" y="0" width="1240" height="330" rx="22" fill="#0f1115" stroke="#2a2e37" stroke-width="1.5"/>
+  <text x="34" y="46" class="base kicker2">SOLO LA PRIMERA VEZ · UNOS 5 MINUTOS</text>
+
+  <!-- Paso 1: Python -->
+  <rect x="24" y="86" width="368" height="204" rx="16" fill="#171a21" stroke="#1d4ed8" stroke-width="2.5"/>
+  <circle cx="54" cy="86" r="18" fill="#1d4ed8"/>
+  <text x="54" y="93" text-anchor="middle" class="base num2" fill="#ffffff">1</text>
+  <text x="208" y="130" text-anchor="middle" class="base titulo2">Instala Python</text>
+  <text x="208" y="160" text-anchor="middle" class="base detalle2">Descárgalo gratis de</text>
+  <text x="208" y="184" text-anchor="middle" class="base detalle2">python.org/downloads</text>
+  <rect x="52" y="210" width="312" height="52" rx="10" fill="#242010" stroke="#C9A227" stroke-width="1.5"/>
+  <text x="208" y="232" text-anchor="middle" class="base aviso">Marca la casilla</text>
+  <text x="208" y="252" text-anchor="middle" class="base aviso">"Add python.exe to PATH"</text>
+
+  <line x1="396" y1="188" x2="432" y2="188" stroke="#C9A227" stroke-width="3" marker-end="url(#flecha2)"/>
+
+  <!-- Paso 2: comando -->
+  <rect x="436" y="86" width="368" height="204" rx="16" fill="#171a21" stroke="#0e7490" stroke-width="2.5"/>
+  <circle cx="466" cy="86" r="18" fill="#0e7490"/>
+  <text x="466" y="93" text-anchor="middle" class="base num2" fill="#ffffff">2</text>
+  <text x="620" y="130" text-anchor="middle" class="base titulo2">Pega un comando</text>
+  <text x="620" y="160" text-anchor="middle" class="base detalle2">Abre PowerShell, pega esta</text>
+  <text x="620" y="184" text-anchor="middle" class="base detalle2">línea y presiona Enter:</text>
+  <rect x="464" y="210" width="312" height="52" rx="10" fill="#0b0d10" stroke="#2a2e37" stroke-width="1.5"/>
+  <text x="620" y="232" text-anchor="middle" class="codigo">python -m pip install</text>
+  <text x="620" y="253" text-anchor="middle" class="codigo">ideam-data-automator</text>
+
+  <line x1="808" y1="188" x2="844" y2="188" stroke="#C9A227" stroke-width="3" marker-end="url(#flecha2)"/>
+
+  <!-- Paso 3: abrir -->
+  <rect x="848" y="86" width="368" height="204" rx="16" fill="#171a21" stroke="#15803d" stroke-width="2.5"/>
+  <circle cx="878" cy="86" r="18" fill="#15803d"/>
+  <text x="878" y="93" text-anchor="middle" class="base num2" fill="#ffffff">3</text>
+  <text x="1032" y="130" text-anchor="middle" class="base titulo2">Abre la herramienta</text>
+  <rect x="876" y="148" width="312" height="40" rx="10" fill="#0b0d10" stroke="#2a2e37" stroke-width="1.5"/>
+  <text x="1032" y="174" text-anchor="middle" class="codigo">ideam-socrata tui</text>
+  <text x="1032" y="216" text-anchor="middle" class="base detalle2">¿Dice "no se reconoce"?</text>
+  <text x="1032" y="240" text-anchor="middle" class="base detalle2">Usa la forma equivalente:</text>
+  <text x="1032" y="266" text-anchor="middle" class="codigo">python -m ideam_socrata tui</text>
+</svg>
