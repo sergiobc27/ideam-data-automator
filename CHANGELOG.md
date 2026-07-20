@@ -5,14 +5,26 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el
 versionado sigue [SemVer](https://semver.org/lang/es/).
 
 > **La historia de este proyecto:** nació como trabajo de grado en Ingeniería
-> Civil (Universidad de la Costa, 2026) — *"Automatización Inteligente Para La
-> Gestión Visual De Datos Hídricos Del IDEAM Con Python Y Power BI"* — que
-> demostró un ahorro de tiempo superior al 98 % frente a la descarga manual en
-> el portal DHIME. Las versiones posteriores ejecutan las **Líneas de
-> Investigación Futura** propuestas en esa misma tesis: base de datos propia
-> con actualización programada, ampliación a todas las variables
-> hidrometeorológicas, superación de los límites de la API Socrata y evolución
-> hacia una plataforma web de monitoreo y análisis hídrico.
+> Civil (Universidad de la Costa, 2026), *"Automatización Inteligente Para La
+> Gestión Visual De Datos Hídricos Del IDEAM Con Python Y Power BI"*, que
+> demostró un ahorro de tiempo superior al 98 % frente a la descarga manual
+> en el portal DHIME. Las versiones posteriores pulieron esta herramienta
+> local (más variables, más velocidad, interfaz visual) y la acompañaron de
+> la plataforma web del proyecto: [ideam.sergiobc.com](https://ideam.sergiobc.com).
+
+## [1.2.2] - 2026-07-19
+
+*El repositorio y el paquete quedan enfocados en la herramienta local; la
+plataforma web se presenta como producto aparte, con su enlace.*
+
+### Cambiado
+
+- El paquete publica únicamente la herramienta local (TUI, asistente de
+  consola y descargas por lotes). El código interno de servidor que
+  acompañaba al repositorio se retiró del árbol público y del paquete
+  (subpaquete `ideam_socrata.db` y extra de instalación `server`).
+- README, historia del proyecto y metadatos de cita reescritos alrededor de
+  la herramienta local.
 
 ## [1.2.1.post1] - 2026-07-19
 
