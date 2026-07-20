@@ -50,26 +50,22 @@ flowchart LR
    marca la casilla **"Add Python to PATH"** en la primera pantalla del instalador.
 2. **Abre una terminal**: presiona la tecla Windows, escribe `PowerShell` y
    presiona Enter.
-3. **Instala la herramienta**: copia y pega estas tres líneas, una por una:
+3. **Instala la herramienta**: copia y pega esta línea y presiona Enter:
 
    ```powershell
-   pip install --user pipx
-   pipx ensurepath
-   pipx install ideam-data-automator
+   python -m pip install ideam-data-automator
    ```
 
-4. **Cierra la terminal y ábrela de nuevo** (para que reconozca el comando).
+Y ya está. No hace falta nada más.
 
-Usamos **pipx** porque instala la herramienta aislada y deja el comando listo
-en tu PATH; el clásico `pip install ideam-data-automator` también funciona.
-
-> **¿La terminal dice "ideam-socrata no se reconoce como comando"?**
-> Es que la carpeta de scripts de Python no quedó en el PATH (pasa seguido en
-> Windows). Dos salidas: (a) usa `pipx` como arriba, que lo arregla; o (b)
-> ejecuta siempre anteponiendo `python -m`:
-> ```powershell
-> python -m ideam_socrata.cli tui
-> ```
+> **¿Prefieres pipx?** Si ya usas `pipx` para tus herramientas de Python,
+> `pipx install ideam-data-automator` también funciona y deja el comando
+> `ideam-socrata` aislado en su propio entorno. Si aún no lo tienes, instálalo
+> con `python -m pip install --user pipx` y luego `python -m pipx ensurepath`
+> (anteponer `python -m` evita el clásico "no se reconoce como comando" de
+> Windows). Cierra y abre la terminal después. Ojo: con pipx el programa vive
+> aislado, así que la forma `python -m ideam_socrata tui` de abajo no aplica;
+> usa siempre `ideam-socrata tui`.
 
 ### El recorrido, pantalla por pantalla
 
@@ -78,6 +74,16 @@ en tu PATH; el clásico `pip install ideam-data-automator` también funciona.
 ```powershell
 ideam-socrata tui
 ```
+
+> **¿Dice "ideam-socrata no se reconoce como comando"?** Pasa en algunos
+> Windows cuando la carpeta de scripts de Python no queda en el PATH. Usa esta
+> forma equivalente, que funciona siempre:
+> ```powershell
+> python -m ideam_socrata tui
+> ```
+> (Sirve para todos los comandos de esta guía: `python -m ideam_socrata` seguido
+> de lo mismo. Requiere la versión 1.2.1 o superior; actualiza con
+> `python -m pip install -U ideam-data-automator`.)
 
 **Paso 0 · Acepta los términos**
 

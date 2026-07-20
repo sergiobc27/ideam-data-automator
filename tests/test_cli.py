@@ -4,6 +4,8 @@ comando verify ante fallos de red. Todo sin tocar la red.
 """
 
 import io
+import os
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -84,6 +86,21 @@ class DispatchTests(unittest.TestCase):
             code = cli._dispatch([])
         self.assertEqual(code, 0)
         m.assert_called_once()
+
+
+class ModuleExecutionTests(unittest.TestCase):
+    def test_python_m_ideam_socrata_runs_cli(self):
+        """La guía de instalación enseña `python -m ideam_socrata tui` como la
+        vía que funciona aunque la carpeta Scripts de Python no esté en el PATH
+        (caso común en Windows): el paquete debe ser ejecutable como módulo."""
+        src = str(Path(__file__).resolve().parents[1] / "src")
+        env = {**os.environ, "PYTHONPATH": src}
+        proc = subprocess.run(
+            [sys.executable, "-m", "ideam_socrata", "--version"],
+            capture_output=True, text=True, env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ideam-socrata", proc.stdout)
 
 
 class MainCancellationTests(unittest.TestCase):
