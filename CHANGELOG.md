@@ -14,6 +14,13 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
 > hidrometeorológicas, superación de los límites de la API Socrata y evolución
 > hacia una plataforma web de monitoreo y análisis hídrico.
 
+## [1.2.1.post1] - 2026-07-19
+
+*Solo documentación, el código es idéntico al de 1.2.1: los dos diagramas del
+README (cómo funciona y arquitectura) pasan de Mermaid a imágenes SVG propias,
+porque PyPI no dibuja Mermaid y los mostraba como bloques de código crudo.
+Además, la guía de instalación abre con un resumen visual en 3 pasos.*
+
 ## [1.2.1] - 2026-07-19
 
 *La instalación funciona a la primera para quien no sabe programar.*
