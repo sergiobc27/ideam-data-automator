@@ -148,6 +148,12 @@ trajo cada estación.
 
 ## Otros modos de uso
 
+### Lanzador de doble clic (si descargaste el código)
+
+Si bajaste este repositorio como ZIP y ya tienes Python, haz doble clic en
+`ideam-data-automator.bat`: instala la herramienta si hace falta (solo la
+primera vez) y abre la interfaz visual maximizada.
+
 ### Asistente clásico de consola
 
 ```powershell
