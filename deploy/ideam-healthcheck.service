@@ -1,9 +1,0 @@
-[Unit]
-Description=Healthcheck IDEAM: API + disco + frescura del delta (pings a healthchecks.io)
-After=docker.service
-
-[Service]
-Type=oneshot
-User=root
-EnvironmentFile=-/etc/ideam/ideam.env
-ExecStart=/usr/local/bin/ideam-healthcheck.sh

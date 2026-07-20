@@ -194,10 +194,8 @@ SOCRATA_MAX_WORKERS=10
 SOCRATA_TIMEOUT=300
 ```
 
-Para la herramienta local basta con un solo `SOCRATA_APP_TOKEN`. El modo
-servidor (espejo completo) usa en cambio `SOCRATA_APP_TOKENS` (en plural, varios
-tokens separados por coma que se rotan en round-robin) para sostener las
-descargas masivas; ver [docs/SERVIDOR.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/SERVIDOR.md).
+Para la herramienta basta con un solo `SOCRATA_APP_TOKEN`; el resto de
+variables son ajustes finos opcionales.
 
 ## Estructura
 
@@ -214,33 +212,18 @@ src/ideam_socrata/
   query_validation.py  # Validación de variantes territoriales
   exporting.py         # Export Parquet/CSV + reporte de cobertura
   validation.py        # Modelos Pydantic
-api/                   # API FastAPI que sirve el espejo de datos
-deploy/                # Ingestor, esquema TimescaleDB y operación del servidor
 tests/                 # Pruebas unitarias
-docs/                  # Guías, infografías y validación técnica
+docs/                  # Guías e infografías
 ```
 
-## Arquitectura del proyecto
+## ¿Y la versión web?
 
-La plataforma completa se reparte en **dos repositorios** complementarios:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/sergiobc27/ideam-data-automator/main/docs/img/diagrama-arquitectura.svg" alt="Diagrama de arquitectura: datos.gov.co alimenta la herramienta local y el espejo de datos de este repositorio; la API FastAPI sirve el espejo a la plataforma web del repositorio website, publicada en ideam.sergiobc.com" width="880">
-</p>
-
-- **Este repo (`ideam-data-automator`)**: el paquete Python instalable (CLI y
-  TUI de descarga), el espejo PostgreSQL + TimescaleDB del histórico del IDEAM
-  y la API FastAPI (`api/`) que lo sirve, desplegados en un servidor de Oracle
-  Cloud. La operación del servidor está documentada en
-  [docs/SERVIDOR.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/SERVIDOR.md) y los procedimientos de guardia y
-  recuperación en [docs/RUNBOOK.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/RUNBOOK.md).
-- **[`sergiobc27/website`](https://github.com/sergiobc27/website)**: el
-  frontend web (React/Vite) y el Cloudflare Worker que hace de proxy hacia la
-  API, publicados en [ideam.sergiobc.com](https://ideam.sergiobc.com).
-
-La herramienta local de este repo funciona por sí sola contra Socrata (no
-necesita el servidor); el espejo, la API y la web son la capa de consulta y
-análisis construida encima.
+Este repositorio contiene la **herramienta local**: la instalas y los datos
+llegan directo a tu computador. Como parte del mismo proyecto también existe
+[**ideam.sergiobc.com**](https://ideam.sergiobc.com), la plataforma web donde
+puedes explorar los mismos datos desde el navegador (gráficas, mapas y más)
+sin instalar nada. Usa la que se acomode a tu trabajo: la local para
+descargar series completas a tus carpetas, la web para consultar y visualizar.
 
 ## Documentación
 
@@ -248,10 +231,7 @@ análisis construida encima.
 | --- | --- |
 | [Infografía del flujo local](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/infografias/infografia-flujo-local.pdf) | El proceso completo de descarga en una página visual |
 | [Instructivo paso a paso](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/infografias/instructivo-local.pdf) | Guía de instalación y uso con capturas |
-| [docs/SERVIDOR.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/SERVIDOR.md) | Operación del espejo de datos y la API |
-| [docs/RUNBOOK.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/RUNBOOK.md) | Procedimientos de guardia y recuperación |
 | [docs/HISTORIA.md](https://github.com/sergiobc27/ideam-data-automator/blob/main/docs/HISTORIA.md) | Historia y evolución del proyecto |
-| [docs/validacion/](https://github.com/sergiobc27/ideam-data-automator/tree/main/docs/validacion) | Validación externa de las curvas IDF |
 
 ## Pruebas
 

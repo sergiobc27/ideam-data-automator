@@ -21,13 +21,13 @@ class CoreDependenciesTests(unittest.TestCase):
         text = (ROOT / "requirements.txt").read_text(encoding="utf-8")
         self.assertRegex(text, r"(?m)^\s*requests")
 
-    def test_requests_not_duplicated_in_server_extra(self):
-        """requests es dependencia core: NO debe quedar duplicado en el extra
-        [project.optional-dependencies].server (que ya solo lleva psycopg)."""
+    def test_no_server_extra(self):
+        """El paquete público es SOLO la herramienta local (1.2.2): el extra
+        [server] y el subpaquete de ingesta se retiraron a la copia privada.
+        Si reaparecen aquí, es una regresión de alcance del repo público."""
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        m = re.search(r"\nserver = \[(.*?)\]", text, re.S)
-        self.assertIsNotNone(m, "no se encontró el extra server en pyproject.toml")
-        self.assertNotIn("requests", m.group(1))
+        self.assertNotRegex(text, r"(?m)^server = \[")
+        self.assertFalse((ROOT / "src" / "ideam_socrata" / "db").exists())
 
     def test_requirements_txt_matches_pyproject_core_dependencies(self):
         """requirements.txt se autodeclara "espejo" de pyproject (ver su

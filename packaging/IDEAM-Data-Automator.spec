@@ -35,11 +35,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # La CLI/TUI local solo habla con Socrata (HTTP), nunca con Postgres: el
-    # driver psycopg pertenece al extra opcional [server] (espejo/ingesta) y
-    # collect_all('ideam_socrata') lo arrastra igual porque sigue el import a
-    # nivel de modulo en src/ideam_socrata/db/connection.py. Se excluye a
-    # proposito para no cargar ~16MB de binarios nativos muertos en el .exe.
+    # La CLI/TUI local solo habla con Socrata (HTTP), nunca con Postgres.
+    # La exclusion se conserva de forma defensiva: si psycopg aparece en el
+    # entorno de build, no debe colarse (~16MB de binarios nativos muertos).
     excludes=['psycopg', 'psycopg_binary', 'psycopg_pool'],
     noarchive=False,
     optimize=0,

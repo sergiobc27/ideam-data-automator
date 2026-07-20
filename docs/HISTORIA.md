@@ -1,8 +1,8 @@
 # Historia del proyecto
 
-*Crónica de cómo nació, evolucionó y se transformó este proyecto — de una
-inquietud en clase de Hidráulica a una plataforma de datos con cientos de
-millones de observaciones.*
+*Crónica de cómo nació y evolucionó esta herramienta: de una inquietud en
+clase de Hidráulica a un paquete público que descarga en minutos lo que
+manualmente tomaba horas.*
 
 ---
 
@@ -123,77 +123,30 @@ una buena intuición sobre la accesibilidad —la misma que más adelante llevar
 a la versión web—, aunque esa GUI no tuvo continuidad y quedó archivada en el
 legado del proyecto.
 
-## 6. El salto a la web (abril–mayo 2026)
+## 6. De la terminal al navegador (2026)
 
-La siguiente ambición: que nadie necesitara instalar nada. Se diseñó la
-interfaz de usuario, se materializó en **React + Vite**, y se desplegó como
-**Cloudflare Worker** en `ideam.sergiobc.com`.
+La siguiente ambición fue que nadie necesitara instalar nada para ver sus
+datos. De esa idea nació la **plataforma web del proyecto**,
+[ideam.sergiobc.com](https://ideam.sergiobc.com), donde los mismos datos se
+exploran desde el navegador con gráficas, mapas y análisis interactivos.
 
-Esta era — "Socrata en vivo" — fue una lección de arquitectura: cada consulta
-del usuario viajaba hasta Socrata, y sobrevivir a sus límites exigió una
-maquinaria creciente: caché de catálogos en R2, trabajos asíncronos con
-Durable Objects, rate limiting, reintentos con backoff. El último commit de
-la era (31 de mayo: *"maximize Socrata throughput and harden export jobs"*)
-era ya una confesión: **el cuello de botella no era nuestro código, era
-depender de Socrata en tiempo real.**
+La herramienta local de este repositorio siguió su propio camino de
+maduración: publicación en **PyPI**, rediseño completo de la interfaz de
+terminal, un motor de descarga notablemente más rápido, validaciones
+amigables y el **ejecutable de doble clic** para Windows.
 
-## 7. La gran migración (junio 2026): el espejo propio
+## 7. Dónde estamos
 
-La decisión: ejecutar la línea futura de la tesis y montar **una base de
-datos propia** con TODO el histórico, alimentada automáticamente.
+Hoy el proyecto tiene dos puertas de entrada con un mismo corazón:
 
-**La arquitectura** (2–3 de junio): servidor Oracle Cloud (gratuito, 4 OCPU /
-24 GB / 200 GB ARM) corriendo PostgreSQL 15 + **TimescaleDB** (hypertable
-comprimida + agregados continuos), un ingestor Python que reutiliza el
-pipeline de la tesis, una **API FastAPI** que replica los contratos de la
-web, y un **Cloudflare Tunnel** que la expone sin abrir un solo puerto.
+- **`ideam-data-automator`** (este repositorio): la herramienta local para
+  descargar series completas, limpias y organizadas, directo a tu PC.
+- **[ideam.sergiobc.com](https://ideam.sergiobc.com)**: la plataforma web
+  para consultar y visualizar sin instalar nada.
 
-**La saga del backfill** (3–4 de junio) merece contarse, porque cada fallo
-enseñó algo:
-
-1. **El misterio de los timeouts**: las consultas anuales filtradas tardaban
-   >10 minutos en responder. Causa: pedir los datos *ordenados* obligaba a
-   Socrata a preparar todo antes de transmitir. Quitar el `$order` (el upsert
-   idempotente no necesita orden) destrabó las descargas.
-2. **El navegador era más listo que nosotros**: la observación empírica de
-   que descargar el CSV completo desde el navegador funcionaba ("medio día
-   para 70 GB") mientras nuestro código sufría cortes cada ~5 millones de
-   filas reveló el patrón culpable: descargar-y-procesar entrelazados dejaba
-   el socket ocioso y el servidor cortaba la conexión. Separar la descarga
-   (continua, a disco) del procesamiento multiplicó la velocidad **41x**
-   (de 108 KB/s a 4,4 MB/s).
-3. **El hallazgo no documentado**: Socrata comprime con **gzip** si se le
-   pide (`Accept-Encoding`), aunque su documentación no lo menciona. Los
-   archivos viajan 5–8x más pequeños: conexiones más cortas que terminan
-   antes del corte.
-4. **HTTP 200 no significa "sí"**: el endpoint de export masivo (`rows.csv`)
-   **ignora los filtros `$where` en silencio** — responde 200 con el dataset
-   completo. Una prueba de paridad (¿las mismas 211 filas por ambas vías?) lo
-   desenmascaró en un minuto. Lección grabada: *verificar resultados, no
-   códigos de estado.*
-
-En el camino, el universo de datos resultó mayor de lo estimado: los conteos
-cacheados de Socrata estaban desactualizados, y el total real ronda los
-**~745 millones de observaciones** en los 13 datasets (Dirección del Viento
-sola: 111 millones que ningún conteo oficial reflejaba).
-
-## 8. Dónde estamos y lo que sigue
-
-Hoy el proyecto es un ecosistema de tres piezas con un mismo corazón:
-
-- **`ideam-data-automator`** — el motor: la CLI de la tesis (ahora con motor
-  rápido gzip, validaciones amigables y descargas scriptables) + el ingestor
-  del espejo + la API.
-- **`ideam-webapp`** — la plataforma web en `ideam.sergiobc.com`.
-- El **espejo PostgreSQL/TimescaleDB** llenándose con el histórico completo y
-  actualizándose solo cada madrugada.
-
-Lo que viene: el *cutover* de la web al espejo propio, dashboards de
-analítica (series, climatologías, tendencias) servidos en milisegundos,
-publicación en PyPI, y — fiel al espíritu de la tesis — la posibilidad de
-abrir la API a otros investigadores: una pequeña infraestructura de **ciencia
-abierta** para los datos del agua en Colombia.
+Fiel al espíritu de la tesis, ambas persiguen la misma promesa: que obtener
+datos públicos del agua en Colombia deje de ser difícil.
 
 ---
 
-*Documento vivo. Última actualización: junio de 2026.*
+*Documento vivo. Última actualización: julio de 2026.*
