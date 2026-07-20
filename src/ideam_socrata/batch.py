@@ -106,8 +106,8 @@ def month_blocks(start_date: str, end_date: str):
 
     Devuelve pares (lo, hi) en ISO (hi EXCLUSIVO). Antes devolvía meses
     calendario completos y el primer/último bloque traían días de más: pedir
-    2024-01-01→2024-02-01 bajaba TODO febrero (hallazgo P3 de la auditoría de
-    aceptación — rompía la reproducibilidad de rangos exactos).
+    2024-01-01→2024-02-01 bajaba TODO febrero y rompía la reproducibilidad de
+    rangos exactos.
     """
     start = date.fromisoformat(start_date)
     end = date.fromisoformat(end_date)
@@ -381,7 +381,7 @@ def download(
 def list_datasets() -> None:
     """Imprime los datasets disponibles para `download` y el asistente."""
     tabla = Table(
-        title="Datasets IDEAM — usables con 'download'",
+        title="Datasets IDEAM · usables con 'download'",
         title_style="p_bold",
         header_style="s_bold",
         border_style="borde",
@@ -395,7 +395,7 @@ def list_datasets() -> None:
     console.print(tabla)
 
     especiales = Table(
-        title="Datasets especiales — solo asistente interactivo",
+        title="Datasets especiales · solo asistente interactivo",
         title_style="texto_oscuro",
         header_style="texto_oscuro",
         border_style="borde",

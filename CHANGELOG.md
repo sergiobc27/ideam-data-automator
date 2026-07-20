@@ -1,7 +1,7 @@
 # Changelog
 
 Todos los cambios notables de este proyecto se documentan aquí.
-El formato sigue [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el
+El formato sigue [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) y el
 versionado sigue [SemVer](https://semver.org/lang/es/).
 
 > **La historia de este proyecto:** nació como trabajo de grado en Ingeniería
@@ -11,6 +11,17 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
 > en el portal DHIME. Las versiones posteriores pulieron esta herramienta
 > local (más variables, más velocidad, interfaz visual) y la acompañaron de
 > la plataforma web del proyecto: [ideam.sergiobc.com](https://ideam.sergiobc.com).
+
+## [1.2.3] - 2026-07-19
+
+*Poda interna: el paquete queda únicamente con los módulos que la herramienta
+local realmente usa.*
+
+### Cambiado
+
+- Se retiran utilidades internas de un flujo antiguo que no participaban en la
+  descarga local, junto con sus variables de entorno y pruebas asociadas.
+- Pulido de textos visibles y comentarios.
 
 ## [1.2.2] - 2026-07-19
 
@@ -64,10 +75,8 @@ pensada para personas sin experiencia en programación.*
 
 ## [1.2.0] - 2026-07-03
 
-*Rediseño visual de la TUI y pulido de robustez de la herramienta de terminal,
-derivados de una auditoría multiagente del paquete instalable, más las
-correcciones de las auditorías de fin de junio. Compatible hacia atrás: no
-cambian los comandos ni los formatos de salida.*
+*Rediseño visual de la TUI y pulido de robustez de la herramienta de terminal.
+Compatible hacia atrás: no cambian los comandos ni los formatos de salida.*
 
 ### Herramienta de terminal (CLI + TUI)
 
@@ -100,23 +109,19 @@ cambian los comandos ni los formatos de salida.*
   no exige tener un `.env` presente, lo que facilita usarlo como librería y
   empaquetarlo como ejecutable.
 - Receta de empaquetado a `.exe` de Windows versionada en `packaging/` (icono
-  propio y sin arrastrar dependencias del modo servidor al ejecutable).
+  propio y sin dependencias innecesarias en el ejecutable).
 
 #### Calidad
-- 27 pruebas nuevas (entrypoint de la CLI, escrituras atómicas, validación de
-  cargas y empaquetado). El paquete pasa de 79 a 106 pruebas.
-- Los umbrales de plausibilidad física de cada variable (por ejemplo, cuánta
-  lluvia diaria es físicamente posible) quedan centralizados en un único módulo
-  (`physical_ranges`), la referencia que usa la capa de análisis.
+- 27 pruebas nuevas (entrypoint de la CLI, escrituras atómicas y empaquetado).
+  El paquete pasa de 79 a 106 pruebas.
 - Textos internos y docstrings renombrados al nombre oficial del proyecto,
   **IDEAM Data Automator**.
 
 ## [1.1.0] - 2026-06-19
 
-*Endurecimiento de correctitud y robustez tras dos rondas de auditoría. La CLI y
-la TUI son **compatibles hacia atrás**: no cambian los comandos, los formatos de
-salida ni los `floating_id`. El grueso del trabajo fue del **modo servidor**; los
-cambios que afectan a quien usa la herramienta por terminal van primero.*
+*Endurecimiento de correctitud y robustez. La CLI y la TUI son **compatibles
+hacia atrás**: no cambian los comandos, los formatos de salida ni los
+`floating_id`.*
 
 ### Herramienta de terminal (CLI + TUI)
 
@@ -124,9 +129,7 @@ cambios que afectan a quien usa la herramienta por terminal van primero.*
 - **Consultas a Socrata más robustas (escape SoQL)**: los filtros que la CLI envía
   a `datos.gov.co` (el `$where` por departamento, estación y rango de fechas) ahora
   escapan correctamente los literales. Antes, un valor con una comilla o un
-  carácter inusual podía romper o alterar la consulta. (El mismo blindaje protege
-  al ingestor del modo servidor, donde se procesan miles de valores de forma
-  automática.)
+  carácter inusual podía romper o alterar la consulta.
 - **`--end-date` ahora es exclusivo de verdad**: las ventanas de fechas quedan
   recortadas exactas, sin arrastrar el día final por error.
 - Mayor robustez general y rutas de salida predecibles.
@@ -136,57 +139,25 @@ cambios que afectan a quien usa la herramienta por terminal van primero.*
   publica la telemetría de las estaciones **automáticas** (que empezaron a
   reportar hacia ~2016); las series **convencionales históricas** viven en el
   portal **DHIME** del IDEAM.
-- **7 quick-wins de UX** de la auditoría de producto en la interfaz interactiva.
-
-### Modo servidor (extra `[server]`: espejo PostgreSQL/TimescaleDB e ingesta)
-
-*Solo afecta a quien levanta el espejo de datos; la CLI local no lo necesita.*
-
-#### Cambiado
-- **El espejo de Socrata es ahora una copia PURA**: se retiró el saneo físico
-  durante la ingesta; el espejo refleja exactamente lo publicado por la fuente y
-  el control de calidad físico se reserva para la capa de cálculo (el módulo
-  `physical_ranges.py` queda disponible para ese uso).
-
-#### Corregido
-- **Bug de precipitación multi-sensor**: en estaciones con varios sensores las
-  láminas se inflaban porque los sensores se sumaban. Los agregados diario y
-  mensual son ahora *sensor-aware* (usan el sensor más completo por periodo, no
-  la suma) y `obs_diario` prefiere el medidor real sobre el sensor GPRS
-  sub-reportador.
-- **Zona horaria**: la conexión del ingestor fija `America/Bogota` (antes UTC).
-- El `COPY` de ingesta ya no aborta el lote entero por una sola fila inválida;
-  las altitudes se cargan en su propia transacción. Backfill más robusto: pico de
-  disco acotado al liberar los `.csv.gz` tras el split, `--max-time` en `curl`
-  contra cuelgues de primer byte y casts `timestamptz` correctos al refrescar
-  agregados.
-
-#### Agregado
-- Carga local del espejo desde exports masivos `.csv.gz` (divididos por año), para
-  sembrar la base sin re-descargar vía API.
+- **Mejoras de experiencia de uso** en la interfaz interactiva.
 
 ### Otros
-- Artefactos de **validación IDF externa** (comparación con González 2023, misma
-  red de 10 min) y procedimiento reproducible en `docs/validacion/`.
-- Cobertura de pruebas ampliada (escape SoQL, zona horaria, espejo puro, rangos
-  físicos y validación IDF): la suite supera ahora las **79 pruebas**.
+- Mejoras internas en los componentes de servicio del proyecto (mantenidos hoy
+  por separado): mayor fidelidad y robustez del procesamiento automático de datos.
+- Cobertura de pruebas ampliada: la suite supera ahora las **79 pruebas**.
 
 ## [1.0.3] - 2026-06-05
 
-*Versión de endurecimiento tras una auditoría integral multi-rol (arquitectura,
-seguridad, datos, QA, release y revisión académica).*
+*Versión de mantenimiento con correcciones de seguridad y robustez.*
 
 ### Corregido
-- **La API ahora "falla cerrado"**: si `API_SHARED_SECRET` no está configurado se
-  rechazan todas las solicitudes (antes quedaba sin autenticación) y se registra
-  un error explícito al arrancar.
+- **Los servicios del proyecto "fallan cerrado"**: sin autenticación configurada
+  se rechazan las solicitudes, con un error explícito al arrancar.
 - **Las descargas de datasets especiales ya no exportan resultados parciales**:
   si un bloque falla tras los reintentos, se cancela la exportación con un
   mensaje claro en lugar de producir archivos incompletos en silencio.
 - `requirements.txt` no incluía `textual`: quien instalaba por esa vía no podía
   abrir la interfaz visual (`ideam-socrata tui`).
-- `schema.sql` ahora viaja dentro del paquete (package-data) y la guía de
-  servidor (`docs/SERVIDOR.md`) documenta el flujo correcto con `git clone`.
 
 ### Cambiado
 - Pisos de versión mínima en todas las dependencias (`pandas>=2.0`,
@@ -200,8 +171,7 @@ seguridad, datos, QA, release y revisión académica).*
   `CITATION.cff` con referencia a la tesis, `.zenodo.json` y badges en el README.
 
 ### Cambiado
-- README de PyPI enfocado 100 % en la herramienta local (el modo servidor se
-  movió a `docs/SERVIDOR.md`).
+- README de PyPI enfocado 100 % en la herramienta local.
 - El lanzador de Windows (`.bat`) abre la ventana maximizada.
 
 ## [1.0.1] - 2026-06-05
@@ -231,43 +201,35 @@ del Capítulo 5 de la tesis.*
 - **Fechas reales para Excel**: el CSV exporta `YYYY-MM-DD HH:MM:SS` (filtrable
   como fecha) y el Parquet guarda timestamps nativos, preservando la paridad
   exacta de los `floating_id` históricos.
-- **Espejo de datos propio** (propuesta de tesis: *"almacenamiento en bases de
-  datos locales o en la nube y ejecución programada de actualizaciones"*):
-  subpaquete `ideam_socrata.db` que replica los 13 datasets hidrometeorológicos
-  (≈745 millones de observaciones — la tesis trabajó la precipitación,
-  ≈282M) en PostgreSQL 15 + TimescaleDB: hypertable comprimida,
-  agregados continuos diario/mensual, backfill histórico paralelo y reanudable,
-  y delta incremental diario (04:00) con upsert idempotente por `floating_id`.
-- **API HTTP** (propuesta de tesis: *"plataforma inteligente de monitoreo y
-  análisis hídrico"*): servicio FastAPI (`api/`) que sirve el espejo —
-  catálogos, vista previa, exportación ZIP organizada (csv/json/parquet) y 7
-  endpoints de analítica (series temporales, climatología mensual,
-  estadísticas por región/estación). Reemplaza las consultas en vivo a Socrata
-  de [ideam.sergiobc.com](https://ideam.sergiobc.com).
-- **CLI — comando `download`**: descarga no interactiva y scriptable
+- **Base de datos propia del proyecto** (propuesta de tesis: *"almacenamiento
+  en bases de datos locales o en la nube y ejecución programada de
+  actualizaciones"*): réplica de los 13 datasets hidrometeorológicos
+  (≈745 millones de observaciones; la tesis trabajó la precipitación, ≈282M)
+  con actualización diaria automática.
+- **Servicio de datos** (propuesta de tesis: *"plataforma inteligente de
+  monitoreo y análisis hídrico"*): la base que hoy alimenta la plataforma web
+  [ideam.sergiobc.com](https://ideam.sergiobc.com).
+- **CLI · comando `download`**: descarga no interactiva y scriptable
   (dataset + departamentos + rango de fechas) con dos motores: `rapido`
   (compresión gzip en tránsito, ~2x más veloz) y `soda` (paginación clásica de
   la tesis). Con barra de progreso en vivo y panel de resumen.
-- **CLI — comando `datasets`**: tabla de los 13 datasets disponibles con su
+- **CLI · comando `datasets`**: tabla de los 13 datasets disponibles con su
   tamaño aproximado (la precipitación de la tesis ≈282M dentro de los ≈745M
   totales hoy mapeados).
-- **CLI — validaciones amigables**: departamentos mal escritos sugieren la
+- **CLI · validaciones amigables**: departamentos mal escritos sugieren la
   corrección ("¿Quisiste decir 'BOLIVAR'?") y se validan ANTES de ir a la red;
   fechas malformadas o invertidas explican el error en lugar de mostrar un
   traceback; `--version`, `verify` generalizado y ejemplos en `--help`.
 - Salida UTF-8 en consolas Windows (acentos correctos).
-- Despliegue como servicios `systemd` (`deploy/` y `api/deploy/`): backfill
-  reanudable, delta diario, API y limpieza de exports.
 - Pruebas nuevas de bloques temporales, paridad de fechas US/ISO y
   validaciones (16 en total).
 
 ### Cambiado
-- Las dependencias de servidor (`psycopg`) se movieron al extra opcional
-  `[server]`: la instalación de la CLI local quedó más liviana (`pip install .`).
+- La instalación de la CLI local quedó más liviana (`pip install .`).
 - `normalize_chunk` acepta DataFrames además de listas de registros (permite
   procesar CSV masivos por chunks conservando el mismo `floating_id`).
-- README reescrito: modos de uso CLI/servidor, mapa del ecosistema y nuevo
-  nombre del repositorio (`ideam-data-automator`).
+- README reescrito con los modos de uso y el nuevo nombre del repositorio
+  (`ideam-data-automator`).
 
 ### Corregido
 - **El export masivo de Socrata (`rows.csv`) ignora `$where` en silencio**

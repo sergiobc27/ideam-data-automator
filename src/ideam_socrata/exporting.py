@@ -86,7 +86,7 @@ def write_coverage_report(df, variable_name, base_dir, date_column=None,
 
     lineas = [
         "=" * 78,
-        f"RESUMEN DE DESCARGA — {variable_name}",
+        f"RESUMEN DE DESCARGA · {variable_name}",
         f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')} · IDEAM Data Automator",
         "=" * 78,
         "",
@@ -102,7 +102,7 @@ def write_coverage_report(df, variable_name, base_dir, date_column=None,
         fechas = pd.to_datetime(df[date_column], errors="coerce")
         if fechas.notna().any():
             lineas.append(
-                f"Rango real de los datos: {fechas.min():%Y-%m-%d} — {fechas.max():%Y-%m-%d}")
+                f"Rango real de los datos: {fechas.min():%Y-%m-%d} a {fechas.max():%Y-%m-%d}")
 
     lineas.append("")
     if "codigoestacion" in df.columns and fechas is not None and fechas.notna().any():

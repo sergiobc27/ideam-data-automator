@@ -1,4 +1,4 @@
-"""Dedup determinista (auditoria datos-correctitud #7).
+"""Dedup determinista.
 
 Ante una colision intra-chunk del mismo (estacion, sensor, fecha) con distinto
 valorobservado, deduplicate_observations debe conservar SIEMPRE el mismo valor

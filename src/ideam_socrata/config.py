@@ -19,8 +19,6 @@ except ImportError:
 # -------------- CONFIGURACIÓN GLOBAL -----------------
 APP_TOKEN     = os.getenv("SOCRATA_APP_TOKEN")
 DOMAIN        = os.getenv("SOCRATA_DOMAIN", "www.datos.gov.co")
-SOCRATA_USERNAME = os.getenv("SOCRATA_USERNAME")
-SOCRATA_PASSWORD = os.getenv("SOCRATA_PASSWORD")
 CATALOG_DATASET_ID = "hp9r-jxuu" # Catálogo Nacional Estaciones
 BASE_DIR      = Path(__file__).parent.parent
 CARPETA_BASE  = BASE_DIR / "data" / "processed" / "datos_ideam"
@@ -54,7 +52,6 @@ except OSError:
 LIMIT         = int(os.getenv("SOCRATA_LIMIT", "50000"))
 MAX_WORKERS   = int(os.getenv("SOCRATA_MAX_WORKERS", "20"))
 TIMEOUT       = int(os.getenv("SOCRATA_TIMEOUT", "300"))
-UPSERT_CHUNK_SIZE = int(os.getenv("SOCRATA_UPSERT_CHUNK_SIZE", "5000"))
 EXCEL_MAX_ROWS = int(os.getenv("EXCEL_MAX_ROWS", "1048576"))
 
 # -------------- TEMA UNIVERSIDAD DE LA COSTA -----------------
@@ -78,20 +75,8 @@ console = Console(theme=tema_uc, no_color=bool(os.getenv("NO_COLOR")))
 if not APP_TOKEN:
     logging.warning("SOCRATA_APP_TOKEN no esta definido; se usara lectura anonima si Socrata lo permite.")
 
-def get_socrata_client(write=False):
-    """Build a Socrata client for read or authenticated write operations."""
-    if write:
-        if not SOCRATA_USERNAME or not SOCRATA_PASSWORD:
-            raise RuntimeError(
-                "Para escribir en Socrata configure SOCRATA_USERNAME y SOCRATA_PASSWORD."
-            )
-        return Socrata(
-            DOMAIN,
-            APP_TOKEN,
-            username=SOCRATA_USERNAME,
-            password=SOCRATA_PASSWORD,
-            timeout=TIMEOUT,
-        )
+def get_socrata_client():
+    """Cliente Socrata de solo lectura para las consultas de la herramienta."""
     return Socrata(DOMAIN, APP_TOKEN, timeout=TIMEOUT)
 
 

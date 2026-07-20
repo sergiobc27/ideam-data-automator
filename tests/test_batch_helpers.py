@@ -66,8 +66,7 @@ class MonthBlocksTests(unittest.TestCase):
         self.assertEqual(blocks[-1], ("2022-12-01", "2022-12-31"))
 
     def test_end_date_exclusivo_no_trae_el_mes_siguiente(self):
-        """Regresión P3 (auditoría de aceptación): pedir hasta 2024-02-01
-        EXCLUSIVO bajaba todo febrero (17,726 filas de más)."""
+        """Regresión: pedir hasta 2024-02-01 EXCLUSIVO no debe traer febrero."""
         blocks = month_blocks("2024-01-01", "2024-02-01")
         self.assertEqual(blocks, [("2024-01-01", "2024-02-01")])
         # y ningún bloque puede pisar el día final

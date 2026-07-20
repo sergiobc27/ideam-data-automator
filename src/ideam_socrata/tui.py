@@ -252,7 +252,7 @@ class ValuePicker(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="vp"):
-            yield Static(f"[$accent bold]{self.etiqueta}[/] — cargando opciones…", id="vp-tit")
+            yield Static(f"[$accent bold]{self.etiqueta}[/] · cargando opciones…", id="vp-tit")
             yield SelectionList(id="vp-list")
             with Horizontal():
                 yield Button("Cancelar", id="vp-cancel")
@@ -278,7 +278,7 @@ class ValuePicker(ModalScreen):
             sl.add_option(Selection(v, v, v in self.preseleccion))
         sl.loading = False
         self.query_one("#vp-tit", Static).update(
-            f"[$accent bold]{self.etiqueta}[/] — Espacio marca ✓ · {len(vals)} opciones")
+            f"[$accent bold]{self.etiqueta}[/] · Espacio marca ✓ · {len(vals)} opciones")
 
     @on(Button.Pressed, "#vp-ok")
     def _ok(self) -> None:
@@ -536,7 +536,7 @@ class IdeamTUI(App):
         aceptar.tooltip = "Aceptas el uso académico e investigativo y entras al asistente."
         return Vertical(
             Static(Content.from_rich_text(build_logo_text()), id="logo"),
-            Shimmer("» Descarga, valida y organiza datos hídricos del IDEAM — sin límites «",
+            Shimmer("» Descarga, valida y organiza datos hídricos del IDEAM, sin límites «",
                     id="tagline"),
             Static(PRESENTACION, classes="presentacion"),
             Static(AVISO_LEGAL, classes="legal"),

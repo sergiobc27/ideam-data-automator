@@ -211,7 +211,6 @@ src/ideam_socrata/
   transform.py         # Normalización, floating_id, deduplicación
   query_validation.py  # Validación de variantes territoriales
   exporting.py         # Export Parquet/CSV + reporte de cobertura
-  validation.py        # Modelos Pydantic
 tests/                 # Pruebas unitarias
 docs/                  # Guías e infografías
 ```

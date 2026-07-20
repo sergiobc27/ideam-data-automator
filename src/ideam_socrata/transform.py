@@ -117,8 +117,7 @@ def deduplicate_observations(df, date_column):
     # Socrata (arbitraria, no la mas reciente). Ordenando por la identidad + el
     # valor, keep="last" conserva de forma DETERMINISTA el valor mayor de la
     # colision. Socrata no expone marca de recencia para preferir la correccion
-    # mas nueva (ver auditoria datos-correctitud #7); el upsert DO UPDATE sigue
-    # convergiendo al ultimo lote publicado entre chunks.
+    # mas nueva.
     sort_cols = list(dedup_cols)
     if "valorobservado" in df.columns:
         sort_cols.append("valorobservado")

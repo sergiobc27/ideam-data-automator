@@ -110,11 +110,11 @@ class QueryExportHelperTests(unittest.TestCase):
             )
             contenido = Path(ruta).read_text(encoding="utf-8")
 
-        self.assertIn("RESUMEN DE DESCARGA — Precipitación", contenido)
+        self.assertIn("RESUMEN DE DESCARGA · Precipitación", contenido)
         self.assertIn("Departamentos: ATLANTICO", contenido)
         self.assertIn("Filas únicas: 5", contenido)
         self.assertIn("7 duplicados depurados", contenido)
-        self.assertIn("Rango real de los datos: 2016-06-10 — 2026-01-01", contenido)
+        self.assertIn("Rango real de los datos: 2016-06-10 a 2026-01-01", contenido)
         self.assertIn("0021195190", contenido)
         self.assertIn("2016-06-10 → 2020-01-15", contenido)
         self.assertIn("0029004520", contenido)

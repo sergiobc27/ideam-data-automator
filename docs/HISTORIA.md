@@ -15,7 +15,7 @@ Investigación en Recursos Hídricos**. El planteamiento inicial era distinto:
 *"Modelado y gestión de la sedimentación en el Canal del Dique"*.
 
 Pero al intentar conseguir los datos hidrológicos que ese estudio necesitaba,
-apareció el verdadero problema —y la verdadera oportunidad—: obtener
+apareció el verdadero problema (y la verdadera oportunidad): obtener
 información del IDEAM era lento, fragmentado y frustrante. Lo que empezó como
 un obstáculo se convirtió en el proyecto mismo. La pregunta se reformuló:
 *¿por qué obtener datos públicos de agua en Colombia tiene que ser tan
@@ -33,8 +33,8 @@ respuesta" como la queja principal.
 
 Hacia **diciembre de 2024 / enero de 2025** llegaron las primeras pruebas
 técnicas: **automatizar el portal DHIME directamente** mediante web scraping.
-Inspeccionando la plataforma se identificó su servicio web interno —el
-endpoint `DhimeServicePortal/api/...`— y se escribió un pequeño prototipo que
+Inspeccionando la plataforma se identificó su servicio web interno (el
+endpoint `DhimeServicePortal/api/...`) y se escribió un pequeño prototipo que
 funcionaba. Pero surgió la duda responsable: hacerlo sin permiso podía afectar
 la estabilidad de la plataforma. Así que se hizo lo correcto: **preguntar
 antes de avanzar**.
@@ -51,7 +51,7 @@ de uso. La respuesta de la Oficina de Informática del IDEAM (radicado
 > [...] se ha dispuesto la información [...] en la página
 > https://www.datos.gov.co, donde se permite consumir los datos por medio de
 > API's."*
-> — Wilmer Espitia Muñoz, Jefe Oficina de Informática, IDEAM
+> (Wilmer Espitia Muñoz, Jefe Oficina de Informática, IDEAM)
 
 Esa puerta cerrada señaló la ventana correcta: el camino oficial para fines
 investigativos era la plataforma de **Datos Abiertos Colombia
@@ -60,8 +60,8 @@ publica sus datasets masivos. El propio IDEAM adjuntó a su respuesta el manual
 para consumirlos.
 
 *Ese PQR cambió el rumbo del proyecto: de "raspar" un portal web a consumir
-una API de datos abiertos — más frágil de lo que parecía, pero infinitamente
-más correcto.*
+una API de datos abiertos, más frágil de lo que parecía, pero infinitamente
+más correcta.*
 
 > **Nota sobre seguridad (divulgación responsable):** durante esta etapa de
 > exploración del portal DHIME se observaron además debilidades estructurales
@@ -75,7 +75,7 @@ más correcto.*
 Con el rumbo claro hacia Socrata, los primeros scripts funcionales (linaje
 `v1.7`–`v1.9`) hablaban con la API "a mano": **`requests` para las peticiones
 HTTP crudas, `csv` de la librería estándar para escribir, `tqdm` para la barra
-de progreso y `ThreadPoolExecutor` para paralelizar** — 216 líneas de Python
+de progreso y `ThreadPoolExecutor` para paralelizar**: 216 líneas de Python
 puro, sin pandas siquiera. Ya estaban las ideas que sobrevivirían todas las
 generaciones: descargar por bloques temporales, organizar en carpetas por
 territorio, y reintentar ante fallos.
@@ -86,8 +86,8 @@ no ser estrangulado por las cuotas anónimas.
 
 ## 4. La tesis (20 de marzo de 2026)
 
-El trabajo de grado — *"Automatización Inteligente Para La Gestión Visual De
-Datos Hídricos Del IDEAM Con Python Y Power BI"* — formalizó el flujo:
+El trabajo de grado, *"Automatización Inteligente Para La Gestión Visual De
+Datos Hídricos Del IDEAM Con Python Y Power BI"*, formalizó el flujo:
 **Python extrae de Socrata → CSVs organizados por carpetas → ETL → tablero
 interactivo en Power BI**, enfocado en precipitación (≈282 millones de
 registros disponibles).
@@ -119,8 +119,8 @@ En cuestión de semanas el script artesanal se profesionalizó:
 
 En paralelo se desarrolló una **versión con interfaz gráfica (GUI)** en Python,
 pensando en que muchos estudiantes no usarían una herramienta de terminal. Era
-una buena intuición sobre la accesibilidad —la misma que más adelante llevaría
-a la versión web—, aunque esa GUI no tuvo continuidad y quedó archivada en el
+una buena intuición sobre la accesibilidad (la misma que más adelante llevaría
+a la versión web), aunque esa GUI no tuvo continuidad y quedó archivada en el
 legado del proyecto.
 
 ## 6. De la terminal al navegador (2026)
